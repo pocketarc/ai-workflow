@@ -1,0 +1,6 @@
+providers:
+  - Barryvdh\LaravelIdeHelper\IdeHelperServiceProvider
+  - AiWorkflow\AiWorkflowServiceProvider
+
+migrations:
+  - database/migrations

@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+namespace AiWorkflow;
+
+use Illuminate\Support\ServiceProvider;
+
+class AiWorkflowServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->mergeConfigFrom(__DIR__.'/../config/ai-workflow.php', 'ai-workflow');
+
+        $this->app->singleton(AiService::class);
+        $this->app->singleton(PromptService::class);
+        $this->app->singleton(AiWorkflowReplayer::class);
+    }
+
+    public function boot(): void
+    {
+        if ($this->app->runningInConsole()) {
+            $this->publishes([
+                __DIR__.'/../config/ai-workflow.php' => config_path('ai-workflow.php'),
+            ], 'ai-workflow-config');
+
+            $this->publishesMigrations([
+                __DIR__.'/../database/migrations' => database_path('migrations'),
+            ], 'ai-workflow-migrations');
+        }
+    }
+}

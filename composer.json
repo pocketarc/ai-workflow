@@ -1,0 +1,48 @@
+{
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "pocketarc/ai-workflow",
+    "description": "Production-ready AI workflows for Laravel — resilient calls with retries, fallback models, and prompt management.",
+    "keywords": ["laravel", "ai", "prism", "retry", "prompts"],
+    "license": "MIT",
+    "type": "library",
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^11.0|^12.0",
+        "mustache/mustache": "^3.0",
+        "prism-php/prism": "^0.99",
+        "spatie/yaml-front-matter": "^2.0",
+        "ext-curl": "*"
+    },
+    "require-dev": {
+        "barryvdh/laravel-ide-helper": "^3.6",
+        "larastan/larastan": "^3",
+        "laravel/pint": "^1.24",
+        "orchestra/testbench": "^10.0",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "phpunit/phpunit": "^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "AiWorkflow\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "AiWorkflow\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "AiWorkflow\\AiWorkflowServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
+    },
+    "prefer-stable": true
+}
