@@ -114,4 +114,18 @@ class PromptServiceTest extends TestCase
         $this->assertNotNull($prompt->rawTemplate);
         $this->assertSame($prompt->prompt, $prompt->rawTemplate);
     }
+
+    public function test_load_parses_tags_from_front_matter(): void
+    {
+        $prompt = $this->service->load('tagged_prompt');
+
+        $this->assertSame(['classification', 'intent'], $prompt->tags);
+    }
+
+    public function test_load_returns_empty_tags_when_not_specified(): void
+    {
+        $prompt = $this->service->load('test_prompt');
+
+        $this->assertSame([], $prompt->tags);
+    }
 }

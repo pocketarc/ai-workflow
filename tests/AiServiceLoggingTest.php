@@ -210,6 +210,120 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertSame(0, $execution->totalDurationMs());
     }
 
+    public function test_prompt_tags_are_stored(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Hello')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $prompt = new PromptData(
+            id: 'test',
+            model: 'openrouter:test-model',
+            prompt: 'You are a helpful assistant.',
+            tags: ['classification', 'intent'],
+        );
+
+        $service = app(AiService::class);
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame(['classification', 'intent'], $request->tags);
+    }
+
+    public function test_service_tags_are_stored(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Hello')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $service->setTags(['billing', 'urgent']);
+        $service->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame(['billing', 'urgent'], $request->tags);
+    }
+
+    public function test_prompt_and_service_tags_are_merged(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Hello')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $prompt = new PromptData(
+            id: 'test',
+            model: 'openrouter:test-model',
+            prompt: 'You are a helpful assistant.',
+            tags: ['classification', 'shared'],
+        );
+
+        $service = app(AiService::class);
+        $service->setTags(['billing', 'shared']);
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame(['classification', 'shared', 'billing'], $request->tags);
+    }
+
+    public function test_tags_null_when_none_set(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Hello')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $service->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertNull($request->tags);
+    }
+
+    public function test_with_tag_scope_filters_correctly(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('First')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('Second')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+
+        $service->setTags(['billing']);
+        $service->sendMessages(collect([new UserMessage('First')]), $this->makePrompt());
+
+        $service->setTags(['support']);
+        $service->sendMessages(collect([new UserMessage('Second')]), $this->makePrompt());
+
+        $this->assertCount(1, AiWorkflowRequest::withTag('billing')->get());
+        $this->assertCount(1, AiWorkflowRequest::withTag('support')->get());
+        $this->assertCount(0, AiWorkflowRequest::withTag('nonexistent')->get());
+    }
+
+    public function test_with_any_tag_scope_filters_correctly(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('First')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('Second')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('Third')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+
+        $service->setTags(['billing']);
+        $service->sendMessages(collect([new UserMessage('First')]), $this->makePrompt());
+
+        $service->setTags(['support']);
+        $service->sendMessages(collect([new UserMessage('Second')]), $this->makePrompt());
+
+        $service->setTags(['other']);
+        $service->sendMessages(collect([new UserMessage('Third')]), $this->makePrompt());
+
+        $this->assertCount(2, AiWorkflowRequest::withAnyTag(['billing', 'support'])->get());
+    }
+
     public function test_messages_are_serialized_correctly(): void
     {
         Prism::fake([

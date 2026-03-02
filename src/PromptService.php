@@ -34,6 +34,7 @@ class PromptService
 
         $model = $document->matter('model');
         $fallbackModel = $document->matter('fallback_model');
+        $tags = $document->matter('tags');
 
         if (! is_string($model)) {
             throw new RuntimeException(
@@ -46,12 +47,16 @@ class PromptService
             ? $this->mustache->render($rawTemplate, $variables)
             : $rawTemplate;
 
+        /** @var list<string> $parsedTags */
+        $parsedTags = is_array($tags) ? array_values(array_filter($tags, 'is_string')) : [];
+
         return new PromptData(
             id: $id,
             model: $model,
             prompt: $prompt,
             fallbackModel: is_string($fallbackModel) ? $fallbackModel : null,
             rawTemplate: $rawTemplate,
+            tags: $parsedTags,
         );
     }
 

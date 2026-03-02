@@ -24,6 +24,8 @@ use Prism\Prism\Tool;
  * @method static Generator<int, StreamEvent, mixed, void> streamMessages(Collection<int, \Prism\Prism\Contracts\Message> $messages, \AiWorkflow\PromptData $prompt, ?\AiWorkflow\PromptData $extraContext = null, int $steps = 15)
  * @method static void setContext(array<string, mixed> $context)
  * @method static array<string, mixed> getContext()
+ * @method static void setTags(list<string> $tags)
+ * @method static list<string> getTags()
  * @method static void resolveToolsUsing(Closure $resolver)
  * @method static list<Tool> getTools()
  * @method static void startExecution(string $name, array<string, mixed> $metadata = [])

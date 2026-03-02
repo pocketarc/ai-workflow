@@ -36,6 +36,9 @@ class AiService
     /** @var array<string, mixed> */
     private array $context = [];
 
+    /** @var list<string> */
+    private array $tags = [];
+
     /** @var (Closure(array<string, mixed>): list<Tool>)|null */
     private ?Closure $toolResolver = null;
 
@@ -57,6 +60,24 @@ class AiService
     public function getContext(): array
     {
         return $this->context;
+    }
+
+    /**
+     * Set tags to attach to subsequent AI requests.
+     *
+     * @param  list<string>  $tags
+     */
+    public function setTags(array $tags): void
+    {
+        $this->tags = $tags;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function getTags(): array
+    {
+        return $this->tags;
     }
 
     /**
@@ -526,6 +547,18 @@ class AiService
     }
 
     /**
+     * Merge prompt-level tags with service-level tags, deduplicated.
+     *
+     * @return list<string>|null
+     */
+    private function resolveTags(PromptData $prompt): ?array
+    {
+        $merged = array_values(array_unique([...$prompt->tags, ...$this->tags]));
+
+        return $merged !== [] ? $merged : null;
+    }
+
+    /**
      * Log a request to the database if logging is enabled.
      *
      * @param  array<int, Message>  $messages
@@ -563,6 +596,7 @@ class AiService
             'duration_ms' => (int) $durationMs,
             'schema' => $schema?->toArray(),
             'error' => $error?->getMessage(),
+            'tags' => $this->resolveTags($prompt),
             'created_at' => now(),
         ]);
     }
@@ -598,6 +632,7 @@ class AiService
             'input_tokens' => $endEvent->usage?->promptTokens,
             'output_tokens' => $endEvent->usage?->completionTokens,
             'duration_ms' => (int) $durationMs,
+            'tags' => $this->resolveTags($prompt),
             'created_at' => now(),
         ]);
     }

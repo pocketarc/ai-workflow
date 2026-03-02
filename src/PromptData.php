@@ -6,12 +6,16 @@ namespace AiWorkflow;
 
 class PromptData
 {
+    /**
+     * @param  list<string>  $tags
+     */
     public function __construct(
         public readonly string $id,
         public readonly string $model,
         public readonly string $prompt,
         public readonly ?string $fallbackModel = null,
         public readonly ?string $rawTemplate = null,
+        public readonly array $tags = [],
     ) {}
 
     /**

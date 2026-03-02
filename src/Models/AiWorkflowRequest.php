@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -29,6 +30,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property array<string, mixed>|null $schema
  * @property string|null $error
  * @property array<string, mixed>|null $metadata
+ * @property list<string>|null $tags
  * @property \Illuminate\Support\Carbon|null $created_at
  * @property-read \AiWorkflow\Models\AiWorkflowExecution|null $execution
  *
@@ -57,6 +59,7 @@ class AiWorkflowRequest extends Model
         'schema',
         'error',
         'metadata',
+        'tags',
         'created_at',
     ];
 
@@ -70,6 +73,7 @@ class AiWorkflowRequest extends Model
             'structured_response' => 'array',
             'schema' => 'array',
             'metadata' => 'array',
+            'tags' => 'array',
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
             'duration_ms' => 'integer',
@@ -83,5 +87,28 @@ class AiWorkflowRequest extends Model
     public function execution(): BelongsTo
     {
         return $this->belongsTo(AiWorkflowExecution::class, 'execution_id');
+    }
+
+    /**
+     * @param  Builder<static>  $query
+     * @return Builder<static>
+     */
+    public function scopeWithTag(Builder $query, string $tag): Builder
+    {
+        return $query->whereJsonContains('tags', $tag);
+    }
+
+    /**
+     * @param  Builder<static>  $query
+     * @param  list<string>  $tags
+     * @return Builder<static>
+     */
+    public function scopeWithAnyTag(Builder $query, array $tags): Builder
+    {
+        return $query->where(function (Builder $q) use ($tags): void {
+            foreach ($tags as $tag) {
+                $q->orWhereJsonContains('tags', $tag);
+            }
+        });
     }
 }
