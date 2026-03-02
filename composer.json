@@ -7,11 +7,11 @@
     "type": "library",
     "require": {
         "php": "^8.2",
+        "ext-curl": "*",
         "illuminate/support": "^11.0|^12.0",
         "mustache/mustache": "^3.0",
-        "prism-php/prism": "^0.99",
-        "spatie/yaml-front-matter": "^2.0",
-        "ext-curl": "*"
+        "prism-php/prism": "dev-main",
+        "spatie/yaml-front-matter": "^2.0"
     },
     "require-dev": {
         "barryvdh/laravel-ide-helper": "^3.6",

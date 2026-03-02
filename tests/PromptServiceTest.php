@@ -63,4 +63,55 @@ class PromptServiceTest extends TestCase
 
         $this->service->load('invalid_prompt');
     }
+
+    public function test_load_with_variables_renders_template(): void
+    {
+        $prompt = $this->service->load('template_prompt', [
+            'customer_name' => 'Jane',
+            'product' => 'Pro',
+            'is_vip' => true,
+        ]);
+
+        $this->assertStringContainsString('You are helping Jane with their Pro subscription.', $prompt->prompt);
+        $this->assertStringContainsString('This is a VIP customer.', $prompt->prompt);
+    }
+
+    public function test_load_with_variables_omits_falsy_sections(): void
+    {
+        $prompt = $this->service->load('template_prompt', [
+            'customer_name' => 'Bob',
+            'product' => 'Basic',
+            'is_vip' => false,
+        ]);
+
+        $this->assertStringContainsString('You are helping Bob with their Basic subscription.', $prompt->prompt);
+        $this->assertStringNotContainsString('VIP', $prompt->prompt);
+    }
+
+    public function test_load_without_variables_passes_through(): void
+    {
+        $prompt = $this->service->load('template_prompt');
+
+        $this->assertStringContainsString('{{ customer_name }}', $prompt->prompt);
+    }
+
+    public function test_load_preserves_raw_template(): void
+    {
+        $prompt = $this->service->load('template_prompt', [
+            'customer_name' => 'Jane',
+            'product' => 'Pro',
+        ]);
+
+        $this->assertNotNull($prompt->rawTemplate);
+        $this->assertStringContainsString('{{ customer_name }}', $prompt->rawTemplate);
+        $this->assertStringContainsString('Jane', $prompt->prompt);
+    }
+
+    public function test_raw_template_set_even_without_variables(): void
+    {
+        $prompt = $this->service->load('test_prompt');
+
+        $this->assertNotNull($prompt->rawTemplate);
+        $this->assertSame($prompt->prompt, $prompt->rawTemplate);
+    }
 }

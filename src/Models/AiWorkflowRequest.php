@@ -57,7 +57,7 @@ class AiWorkflowRequest extends Model
         'schema',
         'error',
         'metadata',
-	    'created_at',
+        'created_at',
     ];
 
     /**

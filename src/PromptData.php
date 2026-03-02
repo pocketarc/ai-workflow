@@ -11,6 +11,7 @@ class PromptData
         public readonly string $model,
         public readonly string $prompt,
         public readonly ?string $fallbackModel = null,
+        public readonly ?string $rawTemplate = null,
     ) {}
 
     /**

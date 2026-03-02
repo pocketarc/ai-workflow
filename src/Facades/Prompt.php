@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Facade;
 use Override;
 
 /**
- * @method static PromptData load(string $id)
+ * @method static PromptData load(string $id, array<string, mixed> $variables = [])
  *
  * @see PromptService
  */

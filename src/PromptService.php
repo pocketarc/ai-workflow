@@ -4,12 +4,25 @@ declare(strict_types=1);
 
 namespace AiWorkflow;
 
+use Mustache\Engine;
 use RuntimeException;
 use Spatie\YamlFrontMatter\YamlFrontMatter;
 
 class PromptService
 {
-    public function load(string $id): PromptData
+    private Engine $mustache;
+
+    public function __construct()
+    {
+        $this->mustache = new Engine([
+            'escape' => fn (string $value): string => $value,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $variables
+     */
+    public function load(string $id, array $variables = []): PromptData
     {
         $path = $this->resolvePromptPath($id);
 
@@ -28,11 +41,17 @@ class PromptService
             );
         }
 
+        $rawTemplate = trim($document->body());
+        $prompt = $variables !== []
+            ? $this->mustache->render($rawTemplate, $variables)
+            : $rawTemplate;
+
         return new PromptData(
             id: $id,
             model: $model,
-            prompt: trim($document->body()),
+            prompt: $prompt,
             fallbackModel: is_string($fallbackModel) ? $fallbackModel : null,
+            rawTemplate: $rawTemplate,
         );
     }
 
