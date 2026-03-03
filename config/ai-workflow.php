@@ -39,4 +39,7 @@ return [
         'enabled' => env('AI_WORKFLOW_CACHE', false),
         'store' => env('AI_WORKFLOW_CACHE_STORE'),
     ],
+
+    // Middleware pipeline — global middleware applied to every AI request.
+    'middleware' => [],
 ];

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AiWorkflow\Facades;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Models\AiWorkflowExecution;
 use Closure;
 use Generator;
@@ -26,6 +27,8 @@ use Prism\Prism\Tool;
  * @method static array<string, mixed> getContext()
  * @method static void setTags(list<string> $tags)
  * @method static list<string> getTags()
+ * @method static void addMiddleware(AiWorkflowMiddleware $middleware)
+ * @method static void clearMiddleware()
  * @method static void resolveToolsUsing(Closure $resolver)
  * @method static list<Tool> getTools()
  * @method static void startExecution(string $name, array<string, mixed> $metadata = [])

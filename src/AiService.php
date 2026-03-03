@@ -7,12 +7,15 @@ namespace AiWorkflow;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Exceptions\RetriesExhaustedException;
+use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Closure;
 use Generator;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Prism\Prism\Contracts\Message;
@@ -39,6 +42,9 @@ class AiService
 
     /** @var list<string> */
     private array $tags = [];
+
+    /** @var list<AiWorkflowMiddleware> */
+    private array $middleware = [];
 
     /** @var (Closure(array<string, mixed>): list<Tool>)|null */
     private ?Closure $toolResolver = null;
@@ -83,6 +89,22 @@ class AiService
     public function getTags(): array
     {
         return $this->tags;
+    }
+
+    /**
+     * Add a middleware to the instance pipeline.
+     */
+    public function addMiddleware(AiWorkflowMiddleware $middleware): void
+    {
+        $this->middleware[] = $middleware;
+    }
+
+    /**
+     * Remove all instance-level middleware.
+     */
+    public function clearMiddleware(): void
+    {
+        $this->middleware = [];
     }
 
     /**
@@ -160,35 +182,48 @@ class AiService
         /** @var array<string, mixed> $clientOptions */
         $clientOptions = config('ai-workflow.client_options');
 
+        $context = new AiWorkflowContext(
+            messages: array_values($messages->all()),
+            prompt: $prompt,
+            systemPrompt: $systemPrompt,
+            method: 'sendMessages',
+        );
+
         $startTime = microtime(true);
 
         try {
-            $response = Prism::text()
-                ->using($provider, $model)
-                ->withSystemPrompt($systemPrompt)
-                ->withMessages($messages->all())
-                ->withTools($this->getTools())
-                ->withMaxSteps($steps)
-                ->withMaxTokens($maxTokens['text'])
-                ->withClientOptions($clientOptions)
-                ->withClientRetry(
-                    times: $this->retryTimes(),
-                    sleepMilliseconds: $this->retrySleep($retryAttempts),
-                    when: $this->retryWhen(),
-                )
-                ->asText();
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($provider, $model, &$retryAttempts, $steps, $maxTokens, $clientOptions): AiWorkflowContext {
+                $ctx->response = Prism::text()
+                    ->using($provider, $model)
+                    ->withSystemPrompt($ctx->systemPrompt)
+                    ->withMessages($ctx->messages)
+                    ->withTools($this->getTools())
+                    ->withMaxSteps($steps)
+                    ->withMaxTokens($maxTokens['text'])
+                    ->withClientOptions($clientOptions)
+                    ->withClientRetry(
+                        times: $this->retryTimes(),
+                        sleepMilliseconds: $this->retrySleep($retryAttempts),
+                        when: $this->retryWhen(),
+                    )
+                    ->asText();
 
+                return $ctx;
+            });
+
+            /** @var Response $response */
+            $response = $context->response;
             $durationMs = (microtime(true) - $startTime) * 1000;
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendMessages');
-            $this->logRequest($prompt, 'sendMessages', $provider, $model, $systemPrompt, $messages->all(), $durationMs, textResponse: $response);
+            $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, textResponse: $response);
             $this->dispatchCompletedEvent($prompt, 'sendMessages', $model, $response->finishReason, $response->usage, $durationMs);
-            $this->cacheTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt, $response);
+            $this->cacheTextResponse($provider, $model, $context->systemPrompt, $context->messages, $prompt, $response);
 
             return $response;
         } catch (Throwable $exception) {
             $durationMs = (microtime(true) - $startTime) * 1000;
-            $this->logRequest($prompt, 'sendMessages', $provider, $model, $systemPrompt, $messages->all(), $durationMs, error: $exception);
+            $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, error: $exception);
             $this->dispatchFailedEvent($prompt, 'sendMessages', $model, $exception, $durationMs);
 
             if ($retryAttempts > 0) {
@@ -218,16 +253,37 @@ class AiService
             return $cached;
         }
 
+        $context = new AiWorkflowContext(
+            messages: array_values($messages->all()),
+            prompt: $prompt,
+            systemPrompt: $prompt->prompt,
+            method: 'sendStructuredMessages',
+            schema: $schema,
+        );
+
         $startTime = microtime(true);
 
         try {
-            $response = $this->executeStructuredRequest($messages, $prompt, $schema, $effectiveModelIdentifier);
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier): AiWorkflowContext {
+                $ctx->response = $this->executeStructuredRequest(
+                    new Collection($ctx->messages),
+                    $ctx->prompt,
+                    $schema,
+                    $effectiveModelIdentifier,
+                    $ctx->systemPrompt,
+                );
+
+                return $ctx;
+            });
+
+            /** @var StructuredResponse $response */
+            $response = $context->response;
             $durationMs = (microtime(true) - $startTime) * 1000;
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessages');
-            $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, structuredResponse: $response, schema: $schema);
+            $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, structuredResponse: $response, schema: $schema);
             $this->dispatchCompletedEvent($prompt, 'sendStructuredMessages', $model, $response->finishReason, $response->usage, $durationMs);
-            $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
+            $this->cacheStructuredResponse($provider, $model, $context->systemPrompt, $context->messages, $prompt, $schema, $response);
 
             return $response;
         } catch (PrismStructuredDecodingException $decodingException) {
@@ -399,6 +455,7 @@ class AiService
         PromptData $prompt,
         ObjectSchema $schema,
         string $modelIdentifier,
+        ?string $systemPrompt = null,
     ): StructuredResponse {
         [$provider, $model] = PromptData::parseModelIdentifier($modelIdentifier);
 
@@ -410,7 +467,7 @@ class AiService
 
         return Prism::structured()
             ->using($provider, $model)
-            ->withSystemPrompt($prompt->prompt)
+            ->withSystemPrompt($systemPrompt ?? $prompt->prompt)
             ->withSchema($schema)
             ->withMessages($messages->all())
             ->withMaxTokens($maxTokens['structured'])
@@ -458,6 +515,46 @@ class AiService
                 when: $this->retryWhen(),
             )
             ->asStructured();
+    }
+
+    /**
+     * Run the context through the middleware pipeline, with the core handler as the innermost step.
+     *
+     * @param  Closure(AiWorkflowContext): AiWorkflowContext  $core
+     */
+    private function runThroughMiddleware(AiWorkflowContext $context, Closure $core): AiWorkflowContext
+    {
+        $middleware = $this->resolveMiddleware();
+
+        if ($middleware === []) {
+            return $core($context);
+        }
+
+        /** @var AiWorkflowContext */
+        return app(Pipeline::class)
+            ->send($context)
+            ->through($middleware)
+            ->then($core);
+    }
+
+    /**
+     * Build the ordered middleware list from global config + instance middleware.
+     *
+     * @return list<AiWorkflowMiddleware>
+     */
+    private function resolveMiddleware(): array
+    {
+        /** @var list<class-string<AiWorkflowMiddleware>> $global */
+        $global = config('ai-workflow.middleware', []);
+
+        $resolved = [];
+        foreach ($global as $className) {
+            /** @var AiWorkflowMiddleware $instance */
+            $instance = app($className);
+            $resolved[] = $instance;
+        }
+
+        return [...$resolved, ...$this->middleware];
     }
 
     /**
