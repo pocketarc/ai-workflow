@@ -35,6 +35,7 @@ class PromptService
         $model = $document->matter('model');
         $fallbackModel = $document->matter('fallback_model');
         $tags = $document->matter('tags');
+        $cacheTtl = $document->matter('cache_ttl');
 
         if (! is_string($model)) {
             throw new RuntimeException(
@@ -57,6 +58,7 @@ class PromptService
             fallbackModel: is_string($fallbackModel) ? $fallbackModel : null,
             rawTemplate: $rawTemplate,
             tags: $parsedTags,
+            cacheTtl: is_int($cacheTtl) ? $cacheTtl : null,
         );
     }
 

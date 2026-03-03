@@ -128,4 +128,18 @@ class PromptServiceTest extends TestCase
 
         $this->assertSame([], $prompt->tags);
     }
+
+    public function test_load_parses_cache_ttl(): void
+    {
+        $prompt = $this->service->load('cached_prompt');
+
+        $this->assertSame(3600, $prompt->cacheTtl);
+    }
+
+    public function test_load_returns_null_cache_ttl_when_not_specified(): void
+    {
+        $prompt = $this->service->load('test_prompt');
+
+        $this->assertNull($prompt->cacheTtl);
+    }
 }

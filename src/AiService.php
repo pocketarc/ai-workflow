@@ -28,6 +28,7 @@ use Prism\Prism\Text\Response;
 use Prism\Prism\Tool;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Prism\Prism\ValueObjects\Meta;
 use Prism\Prism\ValueObjects\Usage;
 use Throwable;
 
@@ -43,6 +44,10 @@ class AiService
     private ?Closure $toolResolver = null;
 
     private ?AiWorkflowExecution $currentExecution = null;
+
+    public function __construct(
+        private readonly AiWorkflowCache $cache,
+    ) {}
 
     /**
      * Set arbitrary context data that tool resolvers can access.
@@ -144,6 +149,11 @@ class AiService
         $systemPrompt = trim($extraPrompt."\n\n".$prompt->prompt);
         $retryAttempts = 0;
 
+        $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
+        if ($cached !== null) {
+            return $cached;
+        }
+
         /** @var array{text: int, structured: int} $maxTokens */
         $maxTokens = config('ai-workflow.max_tokens');
 
@@ -173,6 +183,7 @@ class AiService
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendMessages');
             $this->logRequest($prompt, 'sendMessages', $provider, $model, $systemPrompt, $messages->all(), $durationMs, textResponse: $response);
             $this->dispatchCompletedEvent($prompt, 'sendMessages', $model, $response->finishReason, $response->usage, $durationMs);
+            $this->cacheTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt, $response);
 
             return $response;
         } catch (Throwable $exception) {
@@ -201,6 +212,12 @@ class AiService
     ): StructuredResponse {
         $effectiveModelIdentifier = $modelOverride ?? $prompt->model;
         [$provider, $model] = PromptData::parseModelIdentifier($effectiveModelIdentifier);
+
+        $cached = $this->getCachedStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema);
+        if ($cached !== null) {
+            return $cached;
+        }
+
         $startTime = microtime(true);
 
         try {
@@ -210,6 +227,7 @@ class AiService
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessages');
             $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, structuredResponse: $response, schema: $schema);
             $this->dispatchCompletedEvent($prompt, 'sendStructuredMessages', $model, $response->finishReason, $response->usage, $durationMs);
+            $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
 
             return $response;
         } catch (PrismStructuredDecodingException $decodingException) {
@@ -635,6 +653,106 @@ class AiService
             'tags' => $this->resolveTags($prompt),
             'created_at' => now(),
         ]);
+    }
+
+    /**
+     * @param  array<int, Message>  $messages
+     */
+    private function getCachedTextResponse(string $provider, string $model, string $systemPrompt, array $messages, PromptData $prompt): ?Response
+    {
+        if ($prompt->cacheTtl === null || ! $this->cache->isEnabled()) {
+            return null;
+        }
+
+        $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages);
+        $data = $this->cache->get($key);
+        if ($data === null) {
+            return null;
+        }
+
+        $text = is_string($data['text'] ?? null) ? $data['text'] : '';
+        $finishReason = is_string($data['finish_reason'] ?? null) ? FinishReason::from($data['finish_reason']) : FinishReason::Stop;
+
+        /** @var Collection<int, \Prism\Prism\Text\Step> $steps */
+        $steps = collect([]);
+
+        /** @var Collection<int, Message> $messages */
+        $messages = collect([]);
+
+        return new Response(
+            steps: $steps,
+            text: $text,
+            finishReason: $finishReason,
+            toolCalls: [],
+            toolResults: [],
+            usage: new Usage(0, 0),
+            meta: new Meta(id: '', model: $model),
+            messages: $messages,
+        );
+    }
+
+    /**
+     * @param  array<int, Message>  $messages
+     */
+    private function cacheTextResponse(string $provider, string $model, string $systemPrompt, array $messages, PromptData $prompt, Response $response): void
+    {
+        if ($prompt->cacheTtl === null || ! $this->cache->isEnabled()) {
+            return;
+        }
+
+        $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages);
+        $this->cache->put($key, [
+            'text' => $response->text,
+            'finish_reason' => $response->finishReason->value,
+        ], $prompt->cacheTtl);
+    }
+
+    /**
+     * @param  array<int, Message>  $messages
+     */
+    private function getCachedStructuredResponse(string $provider, string $model, string $systemPrompt, array $messages, PromptData $prompt, ObjectSchema $schema): ?StructuredResponse
+    {
+        if ($prompt->cacheTtl === null || ! $this->cache->isEnabled()) {
+            return null;
+        }
+
+        $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages, $schema);
+        $data = $this->cache->get($key);
+        if ($data === null) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $structured */
+        $structured = is_array($data['structured'] ?? null) ? $data['structured'] : [];
+        $finishReason = is_string($data['finish_reason'] ?? null) ? FinishReason::from($data['finish_reason']) : FinishReason::Stop;
+
+        /** @var Collection<int, \Prism\Prism\Structured\Step> $steps */
+        $steps = collect([]);
+
+        return new StructuredResponse(
+            steps: $steps,
+            text: json_encode($structured, JSON_THROW_ON_ERROR),
+            structured: $structured,
+            finishReason: $finishReason,
+            usage: new Usage(0, 0),
+            meta: new Meta(id: '', model: $model),
+        );
+    }
+
+    /**
+     * @param  array<int, Message>  $messages
+     */
+    private function cacheStructuredResponse(string $provider, string $model, string $systemPrompt, array $messages, PromptData $prompt, ObjectSchema $schema, StructuredResponse $response): void
+    {
+        if ($prompt->cacheTtl === null || ! $this->cache->isEnabled()) {
+            return;
+        }
+
+        $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages, $schema);
+        $this->cache->put($key, [
+            'structured' => $response->structured,
+            'finish_reason' => $response->finishReason->value,
+        ], $prompt->cacheTtl);
     }
 
     private function dispatchCompletedEvent(

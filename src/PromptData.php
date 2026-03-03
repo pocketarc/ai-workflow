@@ -16,6 +16,7 @@ class PromptData
         public readonly ?string $fallbackModel = null,
         public readonly ?string $rawTemplate = null,
         public readonly array $tags = [],
+        public readonly ?int $cacheTtl = null,
     ) {}
 
     /**

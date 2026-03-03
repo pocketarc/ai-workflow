@@ -5,6 +5,12 @@ declare(strict_types=1);
 namespace AiWorkflow;
 
 use Prism\Prism\Contracts\Message;
+use Prism\Prism\ValueObjects\Media\Audio;
+use Prism\Prism\ValueObjects\Media\Document;
+use Prism\Prism\ValueObjects\Media\Image;
+use Prism\Prism\ValueObjects\Media\Media;
+use Prism\Prism\ValueObjects\Media\Text;
+use Prism\Prism\ValueObjects\Media\Video;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\SystemMessage;
 use Prism\Prism\ValueObjects\Messages\ToolResultMessage;
@@ -42,7 +48,14 @@ class MessageSerializer
     private static function serializeMessage(Message $message): array
     {
         if ($message instanceof UserMessage) {
-            return ['type' => 'user', 'content' => $message->content];
+            $result = ['type' => 'user', 'content' => $message->content];
+
+            $additionalContent = self::serializeAdditionalContent($message);
+            if ($additionalContent !== []) {
+                $result['additional_content'] = $additionalContent;
+            }
+
+            return $result;
         }
 
         if ($message instanceof AssistantMessage) {
@@ -77,6 +90,113 @@ class MessageSerializer
     }
 
     /**
+     * Serialize additional content from a UserMessage, excluding the auto-appended Text.
+     *
+     * UserMessage's constructor always appends Text($content) to additionalContent.
+     * We strip that trailing Text to avoid duplication on deserialization.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private static function serializeAdditionalContent(UserMessage $message): array
+    {
+        $items = $message->additionalContent;
+
+        // Remove the trailing Text that matches $content (auto-appended by constructor).
+        if ($items !== []) {
+            $last = end($items);
+            if ($last instanceof Text && $last->text === $message->content) {
+                array_pop($items);
+            }
+        }
+
+        if ($items === []) {
+            return [];
+        }
+
+        return array_values(array_map(self::serializeMediaItem(...), $items));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function serializeMediaItem(Text|Image|Document|Media $item): array
+    {
+        if ($item instanceof Text) {
+            return ['media_type' => 'text', 'text' => $item->text];
+        }
+
+        if ($item instanceof Document) {
+            return array_filter([
+                'media_type' => 'document',
+                'url' => $item->url(),
+                'base64' => $item->base64(),
+                'mime_type' => $item->mimeType(),
+                'document_title' => $item->documentTitle(),
+            ], fn (mixed $v): bool => $v !== null);
+        }
+
+        // Image, Audio, Video, or generic Media — determine specific type.
+        $mediaType = match (true) {
+            $item instanceof Image => 'image',
+            $item instanceof Audio => 'audio',
+            $item instanceof Video => 'video',
+            default => 'media',
+        };
+
+        return array_filter([
+            'media_type' => $mediaType,
+            'url' => $item->url(),
+            'base64' => $item->base64(),
+            'mime_type' => $item->mimeType(),
+        ], fn (mixed $v): bool => $v !== null);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     * @return list<Text|Image|Document|Media>
+     */
+    private static function deserializeAdditionalContent(array $items): array
+    {
+        return array_map(self::deserializeMediaItem(...), $items);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private static function deserializeMediaItem(array $data): Text|Image|Document|Media
+    {
+        $mediaType = is_string($data['media_type'] ?? null) ? $data['media_type'] : 'text';
+
+        if ($mediaType === 'text') {
+            return new Text(is_string($data['text'] ?? null) ? $data['text'] : '');
+        }
+
+        $url = is_string($data['url'] ?? null) ? $data['url'] : null;
+        $base64 = is_string($data['base64'] ?? null) ? $data['base64'] : null;
+        $mimeType = is_string($data['mime_type'] ?? null) ? $data['mime_type'] : null;
+
+        if ($mediaType === 'document') {
+            $title = is_string($data['document_title'] ?? null) ? $data['document_title'] : null;
+
+            $doc = new Document(url: $url, base64: $base64, mimeType: $mimeType);
+            if ($title !== null) {
+                $doc->setDocumentTitle($title);
+            }
+
+            return $doc;
+        }
+
+        $class = match ($mediaType) {
+            'image' => Image::class,
+            'audio' => Audio::class,
+            'video' => Video::class,
+            default => Media::class,
+        };
+
+        return new $class(url: $url, base64: $base64, mimeType: $mimeType);
+    }
+
+    /**
      * @param  array<string, mixed>  $data
      */
     private static function deserializeMessage(array $data): Message
@@ -85,7 +205,14 @@ class MessageSerializer
         $content = is_string($data['content'] ?? null) ? $data['content'] : '';
 
         if ($type === 'user') {
-            return new UserMessage($content);
+            /** @var list<array<string, mixed>> $additionalContentData */
+            $additionalContentData = is_array($data['additional_content'] ?? null) ? $data['additional_content'] : [];
+
+            $additionalContent = $additionalContentData !== []
+                ? self::deserializeAdditionalContent($additionalContentData)
+                : [];
+
+            return new UserMessage($content, $additionalContent);
         }
 
         if ($type === 'assistant') {

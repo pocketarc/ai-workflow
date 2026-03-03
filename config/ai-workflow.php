@@ -33,4 +33,10 @@ return [
     'logging' => [
         'enabled' => env('AI_WORKFLOW_LOGGING', false),
     ],
+
+    // Response caching — opt-in per prompt via cache_ttl front-matter.
+    'cache' => [
+        'enabled' => env('AI_WORKFLOW_CACHE', false),
+        'store' => env('AI_WORKFLOW_CACHE_STORE'),
+    ],
 ];

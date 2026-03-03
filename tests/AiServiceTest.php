@@ -90,14 +90,14 @@ class AiServiceTest extends TestCase
 
     public function test_get_tools_returns_empty_array_by_default(): void
     {
-        $service = new AiService;
+        $service = app(AiService::class);
 
         $this->assertSame([], $service->getTools());
     }
 
     public function test_resolve_tools_using_registers_tools(): void
     {
-        $service = new AiService;
+        $service = app(AiService::class);
 
         $tool = Tool::as('test_tool')
             ->for('A test tool.')
@@ -111,7 +111,7 @@ class AiServiceTest extends TestCase
 
     public function test_tool_resolver_receives_context(): void
     {
-        $service = new AiService;
+        $service = app(AiService::class);
         $receivedContext = null;
 
         $service->resolveToolsUsing(function (array $context) use (&$receivedContext): array {
@@ -128,7 +128,7 @@ class AiServiceTest extends TestCase
 
     public function test_set_context_and_get_context(): void
     {
-        $service = new AiService;
+        $service = app(AiService::class);
 
         $service->setContext(['key' => 'value']);
 
@@ -331,7 +331,7 @@ class AiServiceTest extends TestCase
     {
         config()->set('ai-workflow.retry.jitter', true);
 
-        $service = new AiService;
+        $service = app(AiService::class);
         $method = new \ReflectionMethod($service, 'retrySleep');
         $closure = $method->invoke($service);
 
@@ -361,7 +361,7 @@ class AiServiceTest extends TestCase
     {
         config()->set('ai-workflow.retry.jitter', false);
 
-        $service = new AiService;
+        $service = app(AiService::class);
         $method = new \ReflectionMethod($service, 'retrySleep');
         $closure = $method->invoke($service);
 

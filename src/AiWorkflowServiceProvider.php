@@ -15,6 +15,7 @@ class AiWorkflowServiceProvider extends ServiceProvider
         $this->app->singleton(AiService::class);
         $this->app->singleton(PromptService::class);
         $this->app->singleton(AiWorkflowReplayer::class);
+        $this->app->singleton(AiWorkflowCache::class);
     }
 
     public function boot(): void
