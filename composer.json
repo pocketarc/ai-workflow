@@ -20,7 +20,8 @@
         "laravel/pint": "^1.24",
         "orchestra/testbench": "^10.0",
         "phpstan/phpstan-strict-rules": "^2.0",
-        "phpunit/phpunit": "^12.0"
+        "phpunit/phpunit": "^12.0",
+        "spatie/laravel-data": "^4.20"
     },
     "autoload": {
         "psr-4": {
@@ -38,6 +39,9 @@
                 "AiWorkflow\\AiWorkflowServiceProvider"
             ]
         }
+    },
+    "suggest": {
+        "spatie/laravel-data": "Required for sendStructuredData() — automatic schema generation and validation (^4.0)."
     },
     "config": {
         "sort-packages": true,

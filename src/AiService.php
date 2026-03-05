@@ -7,6 +7,7 @@ namespace AiWorkflow;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Exceptions\RetriesExhaustedException;
+use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Models\AiWorkflowExecution;
@@ -394,6 +395,55 @@ class AiService
 
             throw $decodingException;
         }
+    }
+
+    /**
+     * Send structured messages and return a validated Laravel Data instance.
+     *
+     * Generates the schema from the Data class, sends the request, validates
+     * the response, and retries with feedback on validation failure.
+     *
+     * @template T of \Spatie\LaravelData\Data
+     *
+     * @param  Collection<int, Message>  $messages
+     * @param  class-string<T>  $dataClass
+     * @return T
+     */
+    public function sendStructuredData(
+        Collection $messages,
+        PromptData $prompt,
+        string $dataClass,
+        int $maxAttempts = 3,
+    ): \Spatie\LaravelData\Data {
+        if (! class_exists(\Spatie\LaravelData\Data::class)) {
+            throw new \RuntimeException('spatie/laravel-data is required to use sendStructuredData(). Install it with: composer require spatie/laravel-data');
+        }
+
+        $schema = SchemaBuilder::fromDataClass($dataClass);
+
+        /** @var Collection<int, Message> $attemptMessages */
+        $attemptMessages = new Collection($messages->all());
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
+
+            try {
+                /** @var T */
+                return $dataClass::from($response->structured);
+            } catch (\Throwable $e) {
+                if ($attempt === $maxAttempts) {
+                    throw new StructuredValidationException($e->getMessage(), $attempt, $e);
+                }
+
+                $attemptMessages = new Collection([
+                    ...$messages->all(),
+                    new AssistantMessage(json_encode($response->structured, JSON_THROW_ON_ERROR)),
+                    new UserMessage("The previous response failed validation: {$e->getMessage()}. Please fix the response and try again."),
+                ]);
+            }
+        }
+
+        throw new StructuredValidationException('Max attempts reached', $maxAttempts);
     }
 
     /**

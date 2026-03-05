@@ -27,6 +27,7 @@ use Prism\Prism\Tool;
  * @method static array<string, mixed> getContext()
  * @method static void setTags(list<string> $tags)
  * @method static list<string> getTags()
+ * @method static \Spatie\LaravelData\Data sendStructuredData(Collection<int, \Prism\Prism\Contracts\Message> $messages, \AiWorkflow\PromptData $prompt, class-string<\Spatie\LaravelData\Data> $dataClass, int $maxAttempts = 3)
  * @method static void addMiddleware(AiWorkflowMiddleware $middleware)
  * @method static void clearMiddleware()
  * @method static void resolveToolsUsing(Closure $resolver)
