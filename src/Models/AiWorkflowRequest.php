@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Models;
 
-use Illuminate\Database\Eloquent\Builder;
+use AiWorkflow\Models\Builders\AiWorkflowRequestBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Override;
 
 /**
- * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowRequest newModelQuery()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowRequest newQuery()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowRequest query()
+ * @method static AiWorkflowRequestBuilder<AiWorkflowRequest> newModelQuery()
+ * @method static AiWorkflowRequestBuilder<AiWorkflowRequest> newQuery()
+ * @method static AiWorkflowRequestBuilder<AiWorkflowRequest> query()
  *
  * @property int $id
  * @property string|null $execution_id
@@ -82,33 +83,20 @@ class AiWorkflowRequest extends Model
     }
 
     /**
+     * @param  \Illuminate\Database\Query\Builder  $query
+     * @return AiWorkflowRequestBuilder<AiWorkflowRequest>
+     */
+    #[Override]
+    public function newEloquentBuilder($query): AiWorkflowRequestBuilder
+    {
+        return new AiWorkflowRequestBuilder($query);
+    }
+
+    /**
      * @return BelongsTo<AiWorkflowExecution, $this>
      */
     public function execution(): BelongsTo
     {
         return $this->belongsTo(AiWorkflowExecution::class, 'execution_id');
-    }
-
-    /**
-     * @param  Builder<static>  $query
-     * @return Builder<static>
-     */
-    public function scopeWithTag(Builder $query, string $tag): Builder
-    {
-        return $query->whereJsonContains('tags', $tag);
-    }
-
-    /**
-     * @param  Builder<static>  $query
-     * @param  list<string>  $tags
-     * @return Builder<static>
-     */
-    public function scopeWithAnyTag(Builder $query, array $tags): Builder
-    {
-        return $query->where(function (Builder $q) use ($tags): void {
-            foreach ($tags as $tag) {
-                $q->orWhereJsonContains('tags', $tag);
-            }
-        });
     }
 }

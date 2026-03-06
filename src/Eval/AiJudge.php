@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Eval;
 
+use AiWorkflow\AiService;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
-use Prism\Prism\Facades\Prism;
+use Illuminate\Support\Collection;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
@@ -58,7 +59,11 @@ PROMPT;
             ."## Original Response\n{$originalResponseText}\n\n"
             ."## New Response\n{$newResponseText}";
 
-        [$provider, $model] = PromptData::parseModelIdentifier($this->model);
+        $prompt = new PromptData(
+            id: 'ai-workflow:eval-judge',
+            model: $this->model,
+            prompt: $this->judgePrompt ?? self::DEFAULT_JUDGE_PROMPT,
+        );
 
         $schema = new ObjectSchema(
             name: 'JudgeResult',
@@ -70,12 +75,16 @@ PROMPT;
             requiredFields: ['score', 'reasoning'],
         );
 
-        $judgeResponse = Prism::structured()
-            ->using($provider, $model)
-            ->withSystemPrompt($this->judgePrompt ?? self::DEFAULT_JUDGE_PROMPT)
-            ->withSchema($schema)
-            ->withMessages([new UserMessage($userContent)])
-            ->asStructured();
+        $aiService = app(AiService::class);
+
+        /** @var \Illuminate\Support\Collection<int, \Prism\Prism\Contracts\Message> $messages */
+        $messages = new Collection([new UserMessage($userContent)]);
+
+        $judgeResponse = $aiService->sendStructuredMessages(
+            $messages,
+            $prompt,
+            $schema,
+        );
 
         /** @var array<string, mixed> $structured */
         $structured = $judgeResponse->structured ?? [];

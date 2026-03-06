@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Models;
 
+use AiWorkflow\Models\Builders\AiWorkflowExecutionBuilder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Override;
 
 /**
- * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowExecution newModelQuery()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowExecution newQuery()
- * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowExecution query()
+ * @method static AiWorkflowExecutionBuilder<AiWorkflowExecution> newModelQuery()
+ * @method static AiWorkflowExecutionBuilder<AiWorkflowExecution> newQuery()
+ * @method static AiWorkflowExecutionBuilder<AiWorkflowExecution> query()
  *
  * @property string $id
  * @property string $name
@@ -42,6 +44,16 @@ class AiWorkflowExecution extends Model
         return [
             'metadata' => 'array',
         ];
+    }
+
+    /**
+     * @param  \Illuminate\Database\Query\Builder  $query
+     * @return AiWorkflowExecutionBuilder<AiWorkflowExecution>
+     */
+    #[Override]
+    public function newEloquentBuilder($query): AiWorkflowExecutionBuilder
+    {
+        return new AiWorkflowExecutionBuilder($query);
     }
 
     /**
