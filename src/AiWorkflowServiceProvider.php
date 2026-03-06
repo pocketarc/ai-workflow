@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace AiWorkflow;
 
+use AiWorkflow\Console\EvalRunCommand;
+use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use Illuminate\Support\ServiceProvider;
 
 class AiWorkflowServiceProvider extends ServiceProvider
@@ -16,6 +18,7 @@ class AiWorkflowServiceProvider extends ServiceProvider
         $this->app->singleton(PromptService::class);
         $this->app->singleton(AiWorkflowReplayer::class);
         $this->app->singleton(AiWorkflowCache::class);
+        $this->app->singleton(AiWorkflowEvalRunner::class);
     }
 
     public function boot(): void
@@ -28,6 +31,10 @@ class AiWorkflowServiceProvider extends ServiceProvider
             $this->publishesMigrations([
                 __DIR__.'/../database/migrations' => database_path('migrations'),
             ], 'ai-workflow-migrations');
+
+            $this->commands([
+                EvalRunCommand::class,
+            ]);
         }
     }
 }
