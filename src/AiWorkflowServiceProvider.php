@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AiWorkflow;
 
 use AiWorkflow\Console\EvalRunCommand;
+use AiWorkflow\Console\PromptTestCommand;
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use Illuminate\Support\ServiceProvider;
 
@@ -34,6 +35,7 @@ class AiWorkflowServiceProvider extends ServiceProvider
 
             $this->commands([
                 EvalRunCommand::class,
+                PromptTestCommand::class,
             ]);
         }
     }

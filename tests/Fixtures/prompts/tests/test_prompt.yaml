@@ -1,0 +1,7 @@
+cases:
+  - name: "Basic text response"
+    messages:
+      - role: user
+        content: "Say hello"
+    assert:
+      contains: "hello"

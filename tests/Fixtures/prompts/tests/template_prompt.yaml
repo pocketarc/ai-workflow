@@ -1,0 +1,14 @@
+variables:
+  customer_name: "Jane Doe"
+  product: "Pro Plan"
+  is_vip: true
+
+cases:
+  - name: "VIP customer greeting"
+    messages:
+      - role: user
+        content: "I need help with my account"
+    assert:
+      contains:
+        - "Jane Doe"
+        - "Pro Plan"
