@@ -1,6 +1,6 @@
 # AI Workflow
 
-Production-ready AI workflows for Laravel. Wraps [Prism PHP](https://github.com/prism-php/prism) with retry logic, fallback models, finish reason monitoring, YAML-based prompt management, request logging, and a replay engine for evals.
+Production-ready AI workflows for Laravel. Wraps [Prism PHP](https://github.com/prism-php/prism) with retry logic, fallback models, finish reason monitoring, YAML-based prompt management with Mustache templating, request logging with tagging, middleware pipeline, caching, multimodal support, eval framework, and Laravel Data integration.
 
 ## Installation
 
@@ -29,21 +29,49 @@ Prompts live as Markdown files with YAML front-matter in your configured `prompt
 ---
 model: openrouter:google/gemini-3-pro-preview
 fallback_model: openrouter:openai/gpt-5.2
+tags: [classification, intent]
+cache_ttl: 3600
 ---
 
 You are a helpful assistant that answers questions concisely.
 ```
 
-- `model` (required): The model identifier in `provider:model` format (e.g., `openrouter:google/gemini-3-pro-preview`, `anthropic:claude-opus-4.5`).
+Front-matter fields:
+- `model` (required): Model identifier in `provider:model` format (e.g. `openrouter:google/gemini-3-pro-preview`, `anthropic:claude-opus-4.5`).
 - `fallback_model` (optional): If structured decoding fails, retry with this model. Same `provider:model` format.
+- `tags` (optional): Array of string tags stored with each request for filtering.
+- `cache_ttl` (optional): Cache responses for this many seconds. Omit to disable caching.
 
 The prompt's `id` is derived from the filename. A file at `resources/prompts/my_prompt.md` is `my_prompt`.
 
-Load prompts via the service or facade:
+### Mustache Templating
+
+Prompts support Mustache variables and conditionals:
+
+```markdown
+---
+model: openrouter:anthropic/claude-4-opus
+---
+
+You are helping {{ customer_name }} with their {{ product }} subscription.
+{{#is_vip}}
+This is a VIP customer. Provide priority support.
+{{/is_vip}}
+```
 
 ```php
 use AiWorkflow\Facades\Prompt;
 
+$prompt = Prompt::load('support', [
+    'customer_name' => 'Jane',
+    'product' => 'Pro',
+    'is_vip' => true,
+]);
+```
+
+Load prompts without variables as before:
+
+```php
 $prompt = Prompt::load('my_prompt');
 ```
 
@@ -97,6 +125,37 @@ $data = $response->structured;
 // ['summary' => '...', 'priority' => 3]
 ```
 
+### Structured Responses with Laravel Data
+
+If you have `spatie/laravel-data` installed, you can use Data classes directly. The package generates the schema from the class, validates the response, and retries with feedback on validation failure:
+
+```php
+use AiWorkflow\Attributes\Description;
+use Spatie\LaravelData\Data;
+
+class SentimentAnalysis extends Data
+{
+    public function __construct(
+        #[Description('The detected sentiment: positive, negative, or neutral')]
+        public readonly string $sentiment,
+        #[Description('Confidence score from 0.0 to 1.0')]
+        public readonly float $confidence,
+    ) {}
+}
+
+$result = $aiService->sendStructuredData(
+    collect([new UserMessage('Analyze the sentiment of: "I love this product!"')]),
+    Prompt::load('sentiment'),
+    SentimentAnalysis::class,
+);
+
+// $result is a validated SentimentAnalysis instance
+echo $result->sentiment;   // "positive"
+echo $result->confidence;  // 0.95
+```
+
+On validation failure, the package appends the error to the conversation and retries up to `$maxAttempts` (default 3).
+
 ### Streaming
 
 Stream text responses as a generator of events:
@@ -144,14 +203,6 @@ $aiService->resolveToolsUsing(fn (array $context) => [
         ->for('Get current weather conditions.')
         ->withStringParameter('city', 'The city name')
         ->using(fn (string $city): string => "Weather in {$city}: sunny, 20°C"),
-
-    Tool::as('get_ticket')
-        ->for('Retrieve a support ticket by ID.')
-        ->withStringParameter('id', 'The ticket ID')
-        ->using(function (string $id) use ($context): string {
-            $customer = $context['customer'] ?? null;
-            // ... retrieve ticket scoped to customer
-        }),
 ]);
 ```
 
@@ -162,9 +213,35 @@ $aiService->setContext(['customer' => $customer]);
 $response = $aiService->sendMessages($messages, $prompt);
 ```
 
+## Request Tagging
+
+Tags help you categorize and filter logged requests. Set them in prompt front-matter and/or at runtime:
+
+```yaml
+---
+model: openrouter:anthropic/claude-4
+tags: [classification, intent]
+---
+```
+
+```php
+$aiService->setTags(['billing', 'priority']);
+```
+
+Tags from both sources are merged and deduplicated. Query with custom builder scopes:
+
+```php
+use AiWorkflow\Models\AiWorkflowRequest;
+
+AiWorkflowRequest::query()->withTag('classification')->get();
+AiWorkflowRequest::query()->withAnyTag(['classification', 'intent'])->get();
+AiWorkflowRequest::query()->byModel('claude-4')->successful()->get();
+AiWorkflowRequest::query()->errors()->get();
+```
+
 ## Request Logging
 
-When enabled, every AI call is recorded to the database with enough detail to replay it: system prompt, messages, model, provider, schema, response, token usage, and duration.
+When enabled, every AI call is recorded to the database with enough detail to replay it: system prompt, messages, model, provider, schema, response, token usage, duration, and tags.
 
 Enable logging in your `.env`:
 
@@ -187,12 +264,129 @@ $execution = $aiService->endExecution();
 // All three calls are linked to this execution.
 ```
 
+Query executions and get aggregate token usage:
+
+```php
+use AiWorkflow\Models\AiWorkflowExecution;
+
+$execution = AiWorkflowExecution::query()->byName('work_ticket')->recent()->first();
+$execution->totalInputTokens();
+$execution->totalOutputTokens();
+$execution->totalTokens();
+$execution->totalDurationMs();
+$execution->requestCount();
+```
+
 ### Events
 
 Two events are dispatched after every AI call, regardless of whether logging is enabled:
 
 - `AiWorkflowRequestCompleted` — prompt, method, model, finish reason, usage, duration, execution ID.
 - `AiWorkflowRequestFailed` — prompt, method, model, exception, duration, execution ID.
+
+### Sentry Integration
+
+A ready-to-use listener adds Sentry breadcrumbs for AI requests. Register in your `EventServiceProvider`:
+
+```php
+use AiWorkflow\Events\AiWorkflowRequestCompleted;
+use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Listeners\SentrySpanListener;
+
+protected $listen = [
+    AiWorkflowRequestCompleted::class => [SentrySpanListener::class . '@handleCompleted'],
+    AiWorkflowRequestFailed::class => [SentrySpanListener::class . '@handleFailed'],
+];
+```
+
+No hard dependency on Sentry — the listener is a no-op if Sentry is not installed.
+
+## Caching
+
+Responses can be cached per-prompt using a content-addressable key derived from the request parameters. Set `cache_ttl` in the prompt front-matter:
+
+```yaml
+---
+model: openrouter:anthropic/claude-4
+cache_ttl: 3600
+---
+```
+
+Enable caching globally in your `.env`:
+
+```
+AI_WORKFLOW_CACHE=true
+AI_WORKFLOW_CACHE_STORE=redis  # optional, defaults to your app's default cache store
+```
+
+Cache hits skip the API call entirely and do not create log records.
+
+## Middleware
+
+Add before/after hooks to all AI requests using a middleware pipeline.
+
+### Global Middleware
+
+Register middleware in your config:
+
+```php
+// config/ai-workflow.php
+'middleware' => [
+    App\Middleware\LogRequestMetrics::class,
+],
+```
+
+### Instance Middleware
+
+Add middleware per-instance:
+
+```php
+$aiService->addMiddleware(new App\Middleware\LogRequestMetrics());
+```
+
+### Writing Middleware
+
+Implement `AiWorkflowMiddleware`:
+
+```php
+use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
+
+class LogRequestMetrics implements AiWorkflowMiddleware
+{
+    public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+    {
+        // Before the AI request
+        $start = microtime(true);
+
+        $context = $next($context);
+
+        // After the AI request
+        logger()->info('AI request took ' . (microtime(true) - $start) . 's');
+
+        return $context;
+    }
+}
+```
+
+### Guardrails
+
+Abstract base classes for input and output validation:
+
+```php
+use AiWorkflow\Middleware\InputGuardrail;
+use AiWorkflow\Middleware\AiWorkflowContext;
+
+class PiiDetectionGuardrail extends InputGuardrail
+{
+    protected function validate(AiWorkflowContext $context): void
+    {
+        // Throw GuardrailViolationException if PII is detected in messages
+    }
+}
+```
+
+`InputGuardrail` validates before the request; `OutputGuardrail` validates after. Both throw `GuardrailViolationException` on failure.
 
 ## Replay Engine
 
@@ -225,6 +419,118 @@ $results = $replayer->replayAcrossModels($request, [
 
 // Replay an entire execution — each request loads its own prompt via prompt_id
 $results = $replayer->replayExecution($execution, useCurrentPrompts: true);
+```
+
+## Eval Framework
+
+Systematically evaluate AI outputs by replaying recorded requests across models with pluggable judges.
+
+### Writing a Judge
+
+Implement `AiWorkflowEvalJudge`:
+
+```php
+use AiWorkflow\Eval\AiWorkflowEvalJudge;
+use AiWorkflow\Eval\AiWorkflowEvalResult;
+use AiWorkflow\Models\AiWorkflowRequest;
+use Prism\Prism\Text\Response;
+use Prism\Prism\Structured\Response as StructuredResponse;
+
+class MyJudge implements AiWorkflowEvalJudge
+{
+    public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
+    {
+        // Compare the new response against the original recorded response
+        // Return a score from 0.0 to 1.0
+        return new AiWorkflowEvalResult(score: 0.9, details: ['reasoning' => '...']);
+    }
+}
+```
+
+The package includes `AiJudge` as an example — it uses an AI model to semantically compare original and new responses (e.g. `{"payer": "John"}` vs `{"payer": "john"}` scores high).
+
+### Running Evals in Code
+
+```php
+use AiWorkflow\Eval\AiWorkflowEvalRunner;
+use AiWorkflow\Models\AiWorkflowRequest;
+
+$runner = app(AiWorkflowEvalRunner::class);
+
+$evalRun = $runner->run(
+    name: 'Classification eval',
+    requests: AiWorkflowRequest::query()->withTag('classification')->limit(50)->get()->all(),
+    models: ['openrouter:anthropic/claude-4', 'openrouter:google/gemini-3-pro'],
+    judge: app(MyJudge::class),
+);
+
+$evalRun->averageScore();                                    // overall
+$evalRun->averageScoreForModel('openrouter:anthropic/claude-4'); // per model
+```
+
+### Running Evals via CLI
+
+```bash
+php artisan ai-workflow:eval \
+    --judge=App\\Eval\\MyJudge \
+    --tag=classification \
+    --models=openrouter:anthropic/claude-4,openrouter:google/gemini-3-pro \
+    --name="Classification eval" \
+    --limit=100
+```
+
+The `--judge` option accepts a FQCN resolved from the Laravel container.
+
+## Prompt Testing
+
+Run YAML-defined test cases against prompts to verify AI outputs.
+
+### Test File Format
+
+Test files live alongside prompts in a `tests/` subdirectory:
+
+```
+resources/prompts/
+  classify_intent.md
+  tests/
+    classify_intent.yaml
+```
+
+```yaml
+variables:
+  company_name: "Test Corp"
+
+cases:
+  - name: "Billing question"
+    messages:
+      - role: user
+        content: "How do I update my credit card?"
+    assert:
+      structured:
+        intent: "billing"
+      contains: "billing"
+
+  - name: "Multiple keywords"
+    messages:
+      - role: user
+        content: "I need help with my account password"
+    assert:
+      contains:
+        - "account"
+        - "password"
+```
+
+### Running Tests
+
+```bash
+# Test a specific prompt
+php artisan ai-workflow:prompt-test classify_intent
+
+# Test all prompts that have test files
+php artisan ai-workflow:prompt-test
+
+# Override the model
+php artisan ai-workflow:prompt-test classify_intent --model=anthropic:claude-4
 ```
 
 ## Retry Behaviour
