@@ -11,6 +11,21 @@ use Prism\Prism\Testing\TextResponseFake;
 
 class PromptTestCommandTest extends TestCase
 {
+    /** @var list<string> */
+    private array $tempFiles = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->tempFiles as $path) {
+            if (file_exists($path)) {
+                unlink($path);
+            }
+        }
+        $this->tempFiles = [];
+
+        parent::tearDown();
+    }
+
     public function test_runs_single_prompt_test(): void
     {
         Prism::fake([
@@ -102,8 +117,6 @@ class PromptTestCommandTest extends TestCase
         $this->artisan('ai-workflow:prompt-test', ['prompt' => 'structured_test'])
             ->expectsOutputToContain('PASS: Intent classification')
             ->assertExitCode(0);
-
-        unlink($testFile);
     }
 
     public function test_structured_assertion_failure(): void
@@ -131,8 +144,6 @@ class PromptTestCommandTest extends TestCase
         $this->artisan('ai-workflow:prompt-test', ['prompt' => 'structured_fail'])
             ->expectsOutputToContain('FAIL: Wrong classification')
             ->assertExitCode(1);
-
-        unlink($testFile);
     }
 
     public function test_model_override(): void
@@ -159,20 +170,13 @@ class PromptTestCommandTest extends TestCase
         /** @var string $basePath */
         $basePath = config('ai-workflow.prompts_path');
 
-        // Create a matching prompt file
         $promptPath = "{$basePath}/{$name}.md";
         file_put_contents($promptPath, "---\nmodel: openrouter:test/model\n---\n\nTest prompt.");
+        $this->tempFiles[] = $promptPath;
 
-        // Create test file
         $testPath = "{$basePath}/tests/{$name}.yaml";
         file_put_contents($testPath, \Symfony\Component\Yaml\Yaml::dump($data, 4));
-
-        // Clean up prompt file on destruction (test file cleaned by caller)
-        register_shutdown_function(static function () use ($promptPath): void {
-            if (file_exists($promptPath)) {
-                unlink($promptPath);
-            }
-        });
+        $this->tempFiles[] = $testPath;
 
         return $testPath;
     }

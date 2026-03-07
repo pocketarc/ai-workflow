@@ -8,12 +8,19 @@ use AiWorkflow\AiService;
 use AiWorkflow\PromptData;
 use Illuminate\Support\Collection;
 use Prism\Prism\Enums\FinishReason;
+use Prism\Prism\Enums\Provider as ProviderEnum;
 use Prism\Prism\Exceptions\PrismException;
+use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Facades\Tool;
+use Prism\Prism\PrismManager;
+use Prism\Prism\Providers\Provider;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
+use Prism\Prism\Streaming\Events\StreamEndEvent;
+use Prism\Prism\Structured\Request as StructuredRequest;
 use Prism\Prism\Structured\Response as StructuredResponse;
+use Prism\Prism\Testing\PrismFake;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Response;
@@ -237,6 +244,18 @@ class AiServiceTest extends TestCase
         $this->assertSame(FinishReason::Length, $response->finishReason);
     }
 
+    public function test_finish_reason_content_filter_reports_but_returns(): void
+    {
+        Prism::fake([
+            $this->makeTextResponse(finishReason: FinishReason::ContentFilter),
+        ]);
+
+        $service = app(AiService::class);
+        $response = $service->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+
+        $this->assertSame(FinishReason::ContentFilter, $response->finishReason);
+    }
+
     // --- sendStructuredMessages ---
 
     public function test_send_structured_messages_returns_response(): void
@@ -325,6 +344,68 @@ class AiServiceTest extends TestCase
         );
     }
 
+    // --- streamMessages ---
+
+    public function test_stream_messages_yields_events(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Streamed response')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $events = [];
+        $endEvent = null;
+
+        foreach ($service->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+            $events[] = $event;
+            if ($event instanceof StreamEndEvent) {
+                $endEvent = $event;
+            }
+        }
+
+        $this->assertNotEmpty($events);
+        $this->assertNotNull($endEvent);
+        $this->assertSame(FinishReason::Stop, $endEvent->finishReason);
+    }
+
+    public function test_stream_messages_finish_reason_length_reports_but_returns(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Truncated')->withFinishReason(FinishReason::Length),
+        ]);
+
+        $service = app(AiService::class);
+        $endEvent = null;
+
+        foreach ($service->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+            if ($event instanceof StreamEndEvent) {
+                $endEvent = $event;
+            }
+        }
+
+        $this->assertNotNull($endEvent);
+        $this->assertSame(FinishReason::Length, $endEvent->finishReason);
+    }
+
+    public function test_stream_messages_finish_reason_content_filter_reports_but_returns(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Filtered')->withFinishReason(FinishReason::ContentFilter),
+        ]);
+
+        $service = app(AiService::class);
+        $endEvent = null;
+
+        foreach ($service->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+            if ($event instanceof StreamEndEvent) {
+                $endEvent = $event;
+            }
+        }
+
+        $this->assertNotNull($endEvent);
+        $this->assertSame(FinishReason::ContentFilter, $endEvent->finishReason);
+    }
+
     // --- Retry Jitter ---
 
     public function test_retry_sleep_applies_jitter(): void
@@ -380,5 +461,121 @@ class AiServiceTest extends TestCase
         foreach ($delays as $delay) {
             $this->assertSame(4000, $delay);
         }
+    }
+
+    // --- Fallback Model ---
+
+    /**
+     * Install a custom PrismFake that throws PrismStructuredDecodingException
+     * on the first structured() call, then delegates to the normal fake for subsequent calls.
+     */
+    private function fakeWithStructuredDecodingFailure(StructuredResponse $fallbackResponse): PrismFake
+    {
+        $structuredCallCount = 0;
+        $inner = new PrismFake([$fallbackResponse]);
+
+        $fake = new class($inner, $structuredCallCount) extends PrismFake
+        {
+            private int $callCount = 0;
+
+            public function __construct(
+                private readonly PrismFake $inner,
+                int $initialCount,
+            ) {
+                parent::__construct([]);
+                $this->callCount = $initialCount;
+            }
+
+            public function structured(StructuredRequest $request): StructuredResponse
+            {
+                $this->callCount++;
+                if ($this->callCount === 1) {
+                    throw PrismStructuredDecodingException::make('invalid json');
+                }
+
+                return $this->inner->structured($request);
+            }
+        };
+
+        app()->instance(PrismManager::class, new class($fake) extends PrismManager
+        {
+            public function __construct(private readonly PrismFake $fake) {}
+
+            public function resolve(ProviderEnum|string $name, array $providerConfig = []): Provider
+            {
+                return $this->fake;
+            }
+        });
+
+        return $fake;
+    }
+
+    public function test_structured_messages_falls_back_on_decoding_failure(): void
+    {
+        $fallbackResponse = StructuredResponseFake::make()
+            ->withStructured(['answer' => 'from fallback'])
+            ->withFinishReason(FinishReason::Stop);
+
+        $this->fakeWithStructuredDecodingFailure($fallbackResponse);
+
+        $prompt = new PromptData(
+            id: 'fallback_test',
+            model: 'openrouter:primary-model',
+            prompt: 'You are helpful.',
+            fallbackModel: 'openrouter:fallback-model',
+        );
+
+        $service = app(AiService::class);
+        $response = $service->sendStructuredMessages(
+            collect([new UserMessage('Hello')]),
+            $prompt,
+            $this->makeSchema(),
+        );
+
+        $this->assertSame(['answer' => 'from fallback'], $response->structured);
+    }
+
+    public function test_structured_messages_no_fallback_when_model_override_set(): void
+    {
+        $fallbackResponse = StructuredResponseFake::make()
+            ->withStructured(['answer' => 'unused'])
+            ->withFinishReason(FinishReason::Stop);
+
+        $this->fakeWithStructuredDecodingFailure($fallbackResponse);
+
+        $prompt = new PromptData(
+            id: 'fallback_test',
+            model: 'openrouter:primary-model',
+            prompt: 'You are helpful.',
+            fallbackModel: 'openrouter:fallback-model',
+        );
+
+        $this->expectException(PrismStructuredDecodingException::class);
+
+        $service = app(AiService::class);
+        $service->sendStructuredMessages(
+            collect([new UserMessage('Hello')]),
+            $prompt,
+            $this->makeSchema(),
+            modelOverride: 'openrouter:override-model',
+        );
+    }
+
+    public function test_structured_messages_no_fallback_when_no_fallback_model(): void
+    {
+        $fallbackResponse = StructuredResponseFake::make()
+            ->withStructured(['answer' => 'unused'])
+            ->withFinishReason(FinishReason::Stop);
+
+        $this->fakeWithStructuredDecodingFailure($fallbackResponse);
+
+        $this->expectException(PrismStructuredDecodingException::class);
+
+        $service = app(AiService::class);
+        $service->sendStructuredMessages(
+            collect([new UserMessage('Hello')]),
+            $this->makePrompt(), // no fallbackModel
+            $this->makeSchema(),
+        );
     }
 }

@@ -89,4 +89,28 @@ class AiServiceEventsTest extends TestCase
 
         Event::assertDispatched(AiWorkflowRequestCompleted::class);
     }
+
+    public function test_completed_event_dispatched_on_stream_end(): void
+    {
+        Event::fake([AiWorkflowRequestCompleted::class]);
+
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Streamed')
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+
+        // Must consume the generator for events to fire.
+        foreach ($service->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+            // Consume.
+        }
+
+        Event::assertDispatched(AiWorkflowRequestCompleted::class, function (AiWorkflowRequestCompleted $event): bool {
+            return $event->method === 'streamMessages'
+                && $event->model === 'test-model'
+                && $event->finishReason === FinishReason::Stop;
+        });
+    }
 }

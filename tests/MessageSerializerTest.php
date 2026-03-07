@@ -10,7 +10,12 @@ use Prism\Prism\ValueObjects\Media\Document;
 use Prism\Prism\ValueObjects\Media\Image;
 use Prism\Prism\ValueObjects\Media\Text;
 use Prism\Prism\ValueObjects\Media\Video;
+use Prism\Prism\ValueObjects\Messages\AssistantMessage;
+use Prism\Prism\ValueObjects\Messages\SystemMessage;
+use Prism\Prism\ValueObjects\Messages\ToolResultMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Prism\Prism\ValueObjects\ToolCall;
+use Prism\Prism\ValueObjects\ToolResult;
 
 class MessageSerializerTest extends TestCase
 {
@@ -146,5 +151,102 @@ class MessageSerializerTest extends TestCase
         $this->assertCount(1, $serialized[0]['additional_content']);
         $this->assertSame('text', $serialized[0]['additional_content'][0]['media_type']);
         $this->assertSame('Additional context', $serialized[0]['additional_content'][0]['text']);
+    }
+
+    public function test_roundtrip_assistant_message_with_tool_calls(): void
+    {
+        $toolCall = new ToolCall(id: 'call-1', name: 'search', arguments: ['query' => 'test', 'limit' => 5]);
+        $message = new AssistantMessage('Let me search for that', [$toolCall]);
+
+        $serialized = MessageSerializer::serialize([$message]);
+
+        $this->assertSame('assistant', $serialized[0]['type']);
+        $this->assertSame('Let me search for that', $serialized[0]['content']);
+        $this->assertCount(1, $serialized[0]['tool_calls']);
+        $this->assertSame('call-1', $serialized[0]['tool_calls'][0]['id']);
+        $this->assertSame('search', $serialized[0]['tool_calls'][0]['name']);
+        $this->assertSame(['query' => 'test', 'limit' => 5], $serialized[0]['tool_calls'][0]['arguments']);
+
+        $deserialized = MessageSerializer::deserialize($serialized);
+
+        $this->assertCount(1, $deserialized);
+        $this->assertInstanceOf(AssistantMessage::class, $deserialized[0]);
+        $this->assertSame('Let me search for that', $deserialized[0]->content);
+        $this->assertCount(1, $deserialized[0]->toolCalls);
+        $this->assertSame('call-1', $deserialized[0]->toolCalls[0]->id);
+        $this->assertSame('search', $deserialized[0]->toolCalls[0]->name);
+        $this->assertSame(['query' => 'test', 'limit' => 5], $deserialized[0]->toolCalls[0]->arguments());
+    }
+
+    public function test_roundtrip_tool_result_message(): void
+    {
+        $toolResult = new ToolResult(
+            toolCallId: 'call-1',
+            toolName: 'search',
+            args: ['query' => 'test'],
+            result: ['count' => 3, 'items' => ['a', 'b', 'c']],
+        );
+        $message = new ToolResultMessage([$toolResult]);
+
+        $serialized = MessageSerializer::serialize([$message]);
+
+        $this->assertSame('tool_result', $serialized[0]['type']);
+        $this->assertCount(1, $serialized[0]['tool_results']);
+        $this->assertSame('call-1', $serialized[0]['tool_results'][0]['tool_call_id']);
+        $this->assertSame('search', $serialized[0]['tool_results'][0]['tool_name']);
+        $this->assertSame(['query' => 'test'], $serialized[0]['tool_results'][0]['args']);
+        $this->assertSame(['count' => 3, 'items' => ['a', 'b', 'c']], $serialized[0]['tool_results'][0]['result']);
+
+        $deserialized = MessageSerializer::deserialize($serialized);
+
+        $this->assertCount(1, $deserialized);
+        $this->assertInstanceOf(ToolResultMessage::class, $deserialized[0]);
+        $this->assertCount(1, $deserialized[0]->toolResults);
+        $this->assertSame('call-1', $deserialized[0]->toolResults[0]->toolCallId);
+        $this->assertSame('search', $deserialized[0]->toolResults[0]->toolName);
+        $this->assertSame(['query' => 'test'], $deserialized[0]->toolResults[0]->args);
+        $this->assertSame(['count' => 3, 'items' => ['a', 'b', 'c']], $deserialized[0]->toolResults[0]->result);
+    }
+
+    public function test_roundtrip_system_message(): void
+    {
+        $message = new SystemMessage('You are a helpful assistant.');
+
+        $serialized = MessageSerializer::serialize([$message]);
+
+        $this->assertSame('system', $serialized[0]['type']);
+        $this->assertSame('You are a helpful assistant.', $serialized[0]['content']);
+
+        $deserialized = MessageSerializer::deserialize($serialized);
+
+        $this->assertCount(1, $deserialized);
+        $this->assertInstanceOf(SystemMessage::class, $deserialized[0]);
+        $this->assertSame('You are a helpful assistant.', $deserialized[0]->content);
+    }
+
+    public function test_roundtrip_mixed_conversation(): void
+    {
+        $messages = [
+            new SystemMessage('You are helpful.'),
+            new UserMessage('Search for cats'),
+            new AssistantMessage('I will search', [new ToolCall(id: 'tc-1', name: 'search', arguments: ['q' => 'cats'])]),
+            new ToolResultMessage([new ToolResult(toolCallId: 'tc-1', toolName: 'search', args: ['q' => 'cats'], result: 'Found 5 cats')]),
+            new AssistantMessage('I found 5 cats!'),
+        ];
+
+        $serialized = MessageSerializer::serialize($messages);
+        $deserialized = MessageSerializer::deserialize($serialized);
+
+        $this->assertCount(5, $deserialized);
+        $this->assertInstanceOf(SystemMessage::class, $deserialized[0]);
+        $this->assertInstanceOf(UserMessage::class, $deserialized[1]);
+        $this->assertInstanceOf(AssistantMessage::class, $deserialized[2]);
+        $this->assertInstanceOf(ToolResultMessage::class, $deserialized[3]);
+        $this->assertInstanceOf(AssistantMessage::class, $deserialized[4]);
+
+        $this->assertCount(1, $deserialized[2]->toolCalls);
+        $this->assertSame('tc-1', $deserialized[2]->toolCalls[0]->id);
+        $this->assertCount(1, $deserialized[3]->toolResults);
+        $this->assertSame('Found 5 cats', $deserialized[3]->toolResults[0]->result);
     }
 }

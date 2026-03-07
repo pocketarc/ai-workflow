@@ -45,8 +45,13 @@ class ObservabilityTest extends DatabaseTestCase
             executionId: null,
         );
 
+        // Sentry is not installed in this test environment, so the guard clause should no-op.
+        $this->assertFalse(function_exists('\Sentry\addBreadcrumb'), 'Sentry should not be installed in test environment');
+
         $listener->handleCompleted($event);
-        $this->assertTrue(true);
+
+        // No exception thrown — the guard clause returned early.
+        $this->addToAssertionCount(1);
     }
 
     public function test_sentry_listener_handles_failed_event_without_sentry(): void
@@ -62,8 +67,11 @@ class ObservabilityTest extends DatabaseTestCase
             executionId: null,
         );
 
+        $this->assertFalse(function_exists('\Sentry\addBreadcrumb'), 'Sentry should not be installed in test environment');
+
         $listener->handleFailed($event);
-        $this->assertTrue(true);
+
+        $this->addToAssertionCount(1);
     }
 
     // --- AiWorkflowExecutionBuilder scopes ---

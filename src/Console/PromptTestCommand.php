@@ -84,7 +84,13 @@ class PromptTestCommand extends Command
 
         $files = glob("{$dir}/*.yaml");
 
-        return is_array($files) ? $files : [];
+        if (! is_array($files)) {
+            return [];
+        }
+
+        sort($files);
+
+        return $files;
     }
 
     private function testsPath(): string

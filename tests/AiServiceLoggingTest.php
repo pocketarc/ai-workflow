@@ -173,10 +173,12 @@ class AiServiceLoggingTest extends DatabaseTestCase
 
     public function test_execution_token_tracking(): void
     {
+        $usage = new \Prism\Prism\ValueObjects\Usage(100, 50);
+
         Prism::fake([
-            TextResponseFake::make()->withText('First')->withFinishReason(FinishReason::Stop),
-            TextResponseFake::make()->withText('Second')->withFinishReason(FinishReason::Stop),
-            TextResponseFake::make()->withText('Third')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('First')->withFinishReason(FinishReason::Stop)->withUsage($usage),
+            TextResponseFake::make()->withText('Second')->withFinishReason(FinishReason::Stop)->withUsage($usage),
+            TextResponseFake::make()->withText('Third')->withFinishReason(FinishReason::Stop)->withUsage($usage),
         ]);
 
         $service = app(AiService::class);
@@ -190,9 +192,9 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertNotNull($execution);
 
         $this->assertSame(3, $execution->requestCount());
-        $this->assertGreaterThanOrEqual(0, $execution->totalInputTokens());
-        $this->assertGreaterThanOrEqual(0, $execution->totalOutputTokens());
-        $this->assertGreaterThanOrEqual(0, $execution->totalTokens());
+        $this->assertSame(300, $execution->totalInputTokens());
+        $this->assertSame(150, $execution->totalOutputTokens());
+        $this->assertSame(450, $execution->totalTokens());
         $this->assertGreaterThanOrEqual(0, $execution->totalDurationMs());
     }
 
@@ -322,6 +324,60 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $service->sendMessages(collect([new UserMessage('Third')]), $this->makePrompt());
 
         $this->assertCount(2, AiWorkflowRequest::withAnyTag(['billing', 'support'])->get());
+    }
+
+    public function test_stream_request_is_logged(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Streamed')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new \Prism\Prism\ValueObjects\Usage(80, 40)),
+        ]);
+
+        $service = app(AiService::class);
+
+        foreach ($service->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+            // Consume.
+        }
+
+        $this->assertDatabaseCount('ai_workflow_requests', 1);
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame('streamMessages', $request->method);
+        $this->assertSame('openrouter', $request->provider);
+        $this->assertSame('test-model', $request->model);
+        $this->assertSame('stop', $request->finish_reason);
+        $this->assertSame(80, $request->input_tokens);
+        $this->assertSame(40, $request->output_tokens);
+        $this->assertNull($request->response_text);
+    }
+
+    public function test_cache_hit_does_not_create_log_record(): void
+    {
+        config()->set('ai-workflow.cache.enabled', true);
+        config()->set('ai-workflow.cache.store', 'array');
+
+        $prompt = new PromptData(
+            id: 'test',
+            model: 'openrouter:test-model',
+            prompt: 'You are a helpful assistant.',
+            cacheTtl: 3600,
+        );
+
+        Prism::fake([
+            TextResponseFake::make()->withText('Cached response')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+        $this->assertDatabaseCount('ai_workflow_requests', 1);
+
+        // Second call should be a cache hit — no new log record.
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+        $this->assertDatabaseCount('ai_workflow_requests', 1);
     }
 
     public function test_messages_are_serialized_correctly(): void

@@ -117,11 +117,21 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
             TextResponseFake::make()->withText('From new model')->withFinishReason(FinishReason::Stop),
         ]);
 
+        $fake = Prism::fake([
+            TextResponseFake::make()->withText('From new model')->withFinishReason(FinishReason::Stop),
+        ]);
+
         $replayer = app(AiWorkflowReplayer::class);
         $result = $replayer->replay($recorded, model: 'anthropic:different-model');
 
         $this->assertInstanceOf(Response::class, $result);
         $this->assertSame('From new model', $result->text);
+
+        $fake->assertRequest(function (array $recorded): void {
+            $this->assertCount(1, $recorded);
+            $this->assertSame('different-model', $recorded[0]->model());
+            $this->assertSame('anthropic', $recorded[0]->provider());
+        });
     }
 
     public function test_replay_with_current_prompts(): void
@@ -187,7 +197,7 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
         $this->assertNotNull($recorded);
 
         // Replay across 3 models
-        Prism::fake([
+        $fake = Prism::fake([
             TextResponseFake::make()->withText('Model A response')->withFinishReason(FinishReason::Stop),
             TextResponseFake::make()->withText('Model B response')->withFinishReason(FinishReason::Stop),
             TextResponseFake::make()->withText('Model C response')->withFinishReason(FinishReason::Stop),
@@ -207,6 +217,16 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
         $this->assertSame('Model A response', $results['openrouter:model-a']->text);
         $this->assertSame('Model B response', $results['anthropic:model-b']->text);
         $this->assertSame('Model C response', $results['openai:model-c']->text);
+
+        $fake->assertRequest(function (array $recorded): void {
+            $this->assertCount(3, $recorded);
+            $this->assertSame('model-a', $recorded[0]->model());
+            $this->assertSame('openrouter', $recorded[0]->provider());
+            $this->assertSame('model-b', $recorded[1]->model());
+            $this->assertSame('anthropic', $recorded[1]->provider());
+            $this->assertSame('model-c', $recorded[2]->model());
+            $this->assertSame('openai', $recorded[2]->provider());
+        });
     }
 
     public function test_replay_execution(): void
