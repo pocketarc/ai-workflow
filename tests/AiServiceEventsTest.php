@@ -7,7 +7,7 @@ namespace AiWorkflow\Tests;
 use AiWorkflow\AiService;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
-use AiWorkflow\PromptData;
+use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Illuminate\Support\Facades\Event;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
@@ -16,14 +16,7 @@ use Prism\Prism\ValueObjects\Messages\UserMessage;
 
 class AiServiceEventsTest extends TestCase
 {
-    private function makePrompt(): PromptData
-    {
-        return new PromptData(
-            id: 'test',
-            model: 'openrouter:test-model',
-            prompt: 'You are a helpful assistant.',
-        );
-    }
+    use MakesTestFixtures;
 
     public function test_completed_event_dispatched_on_success(): void
     {

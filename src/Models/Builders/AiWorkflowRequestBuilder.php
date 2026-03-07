@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Models\Builders;
 
+use AiWorkflow\PromptData;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
@@ -36,6 +37,12 @@ class AiWorkflowRequestBuilder extends Builder
 
     public function byModel(string $model): static
     {
+        if (str_contains($model, ':')) {
+            [$provider, $modelName] = PromptData::parseModelIdentifier($model);
+
+            return $this->where('provider', $provider)->where('model', $modelName);
+        }
+
         return $this->where('model', $model);
     }
 

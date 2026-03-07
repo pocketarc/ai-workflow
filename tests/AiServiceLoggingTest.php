@@ -8,36 +8,16 @@ use AiWorkflow\AiService;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
+use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
-use Prism\Prism\Schema\ObjectSchema;
-use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 
 class AiServiceLoggingTest extends DatabaseTestCase
 {
-    private function makePrompt(string $id = 'test', string $model = 'openrouter:test-model'): PromptData
-    {
-        return new PromptData(
-            id: $id,
-            model: $model,
-            prompt: 'You are a helpful assistant.',
-        );
-    }
-
-    private function makeSchema(): ObjectSchema
-    {
-        return new ObjectSchema(
-            name: 'test',
-            description: 'A test schema',
-            properties: [
-                new StringSchema('answer', 'The answer'),
-            ],
-            requiredFields: ['answer'],
-        );
-    }
+    use MakesTestFixtures;
 
     public function test_request_is_logged_when_enabled(): void
     {
@@ -191,11 +171,11 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $execution = $service->endExecution();
         $this->assertNotNull($execution);
 
-        $this->assertSame(3, $execution->requestCount());
-        $this->assertSame(300, $execution->totalInputTokens());
-        $this->assertSame(150, $execution->totalOutputTokens());
-        $this->assertSame(450, $execution->totalTokens());
-        $this->assertGreaterThanOrEqual(0, $execution->totalDurationMs());
+        $this->assertSame(3, $execution->request_count);
+        $this->assertSame(300, $execution->total_input_tokens);
+        $this->assertSame(150, $execution->total_output_tokens);
+        $this->assertSame(450, $execution->total_tokens);
+        $this->assertGreaterThanOrEqual(0, $execution->total_duration_ms);
     }
 
     public function test_execution_token_tracking_with_no_requests(): void
@@ -205,11 +185,11 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $execution = $service->endExecution();
 
         $this->assertNotNull($execution);
-        $this->assertSame(0, $execution->requestCount());
-        $this->assertSame(0, $execution->totalInputTokens());
-        $this->assertSame(0, $execution->totalOutputTokens());
-        $this->assertSame(0, $execution->totalTokens());
-        $this->assertSame(0, $execution->totalDurationMs());
+        $this->assertSame(0, $execution->request_count);
+        $this->assertSame(0, $execution->total_input_tokens);
+        $this->assertSame(0, $execution->total_output_tokens);
+        $this->assertSame(0, $execution->total_tokens);
+        $this->assertSame(0, $execution->total_duration_ms);
     }
 
     public function test_prompt_tags_are_stored(): void

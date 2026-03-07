@@ -7,6 +7,10 @@ namespace AiWorkflow;
 use AiWorkflow\Console\EvalRunCommand;
 use AiWorkflow\Console\PromptTestCommand;
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
+use AiWorkflow\Events\AiWorkflowRequestCompleted;
+use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Listeners\SentryBreadcrumbListener;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 class AiWorkflowServiceProvider extends ServiceProvider
@@ -37,6 +41,11 @@ class AiWorkflowServiceProvider extends ServiceProvider
                 EvalRunCommand::class,
                 PromptTestCommand::class,
             ]);
+        }
+
+        if (function_exists('\Sentry\addBreadcrumb')) {
+            Event::listen(AiWorkflowRequestCompleted::class, [SentryBreadcrumbListener::class, 'handleCompleted']);
+            Event::listen(AiWorkflowRequestFailed::class, [SentryBreadcrumbListener::class, 'handleFailed']);
         }
     }
 }

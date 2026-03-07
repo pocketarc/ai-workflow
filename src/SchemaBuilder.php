@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AiWorkflow;
 
+use AiWorkflow\Attributes\ArrayItemType;
 use AiWorkflow\Attributes\Description;
 use BackedEnum;
 use Prism\Prism\Contracts\Schema;
@@ -49,7 +50,7 @@ class SchemaBuilder
             $type = $param->getType();
             $description = self::getDescription($param);
 
-            [$schema, $nullable] = self::resolveType($type, $name, $description);
+            [$schema, $nullable] = self::resolveType($type, $name, $description, $param);
             $properties[] = $schema;
 
             if (! $param->isDefaultValueAvailable() && ! $nullable) {
@@ -68,7 +69,7 @@ class SchemaBuilder
     /**
      * @return array{Schema, bool} [schema, nullable]
      */
-    private static function resolveType(?\ReflectionType $type, string $name, string $description): array
+    private static function resolveType(?\ReflectionType $type, string $name, string $description, ?ReflectionParameter $param = null): array
     {
         if ($type === null) {
             throw new RuntimeException("Property '{$name}' has no type declaration");
@@ -102,20 +103,60 @@ class SchemaBuilder
 
         $nullable = $nullable || $type->allowsNull();
 
-        $schema = self::mapNamedType($type->getName(), $name, $description, $nullable);
+        $schema = self::mapNamedType($type->getName(), $name, $description, $nullable, $param);
 
         return [$schema, $nullable];
     }
 
-    private static function mapNamedType(string $typeName, string $name, string $description, bool $nullable): Schema
+    private static function mapNamedType(string $typeName, string $name, string $description, bool $nullable, ?ReflectionParameter $param = null): Schema
     {
         return match ($typeName) {
             'string' => new StringSchema($name, $description, $nullable),
             'int', 'float' => new NumberSchema($name, $description, $nullable),
             'bool' => new BooleanSchema($name, $description, $nullable),
-            'array' => new ArraySchema($name, $description, new StringSchema('item', 'Array item'), $nullable),
+            'array' => new ArraySchema($name, $description, self::resolveArrayItemSchema($param), $nullable),
             default => self::mapClassType($typeName, $name, $description, $nullable),
         };
+    }
+
+    private static function resolveArrayItemSchema(?ReflectionParameter $param): Schema
+    {
+        if ($param === null) {
+            return new StringSchema('item', 'Array item');
+        }
+
+        $attributes = $param->getAttributes(ArrayItemType::class);
+
+        if ($attributes === []) {
+            return new StringSchema('item', 'Array item');
+        }
+
+        /** @var ArrayItemType $itemType */
+        $itemType = $attributes[0]->newInstance();
+        $typeName = $itemType->type;
+
+        return match ($typeName) {
+            'string' => new StringSchema('item', 'Array item'),
+            'int', 'float' => new NumberSchema('item', 'Array item'),
+            'bool' => new BooleanSchema('item', 'Array item'),
+            default => self::resolveArrayItemClassType($typeName),
+        };
+    }
+
+    private static function resolveArrayItemClassType(string $typeName): Schema
+    {
+        if (class_exists($typeName) && is_subclass_of($typeName, Data::class)) {
+            $nested = self::fromDataClass($typeName);
+
+            return new ObjectSchema(
+                'item',
+                'Array item',
+                $nested->properties,
+                $nested->requiredFields,
+            );
+        }
+
+        return new StringSchema('item', 'Array item');
     }
 
     private static function mapClassType(string $typeName, string $name, string $description, bool $nullable): Schema

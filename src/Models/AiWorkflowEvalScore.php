@@ -47,7 +47,7 @@ class AiWorkflowEvalScore extends Model
     protected function casts(): array
     {
         return [
-            'score' => 'float',
+            'score' => 'decimal:4',
             'details' => 'array',
             'structured_response' => 'array',
         ];

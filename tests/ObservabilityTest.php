@@ -6,7 +6,7 @@ namespace AiWorkflow\Tests;
 
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
-use AiWorkflow\Listeners\SentrySpanListener;
+use AiWorkflow\Listeners\SentryBreadcrumbListener;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\Models\Builders\AiWorkflowExecutionBuilder;
@@ -29,11 +29,11 @@ class ObservabilityTest extends DatabaseTestCase
         $this->assertInstanceOf(AiWorkflowExecutionBuilder::class, AiWorkflowExecution::query());
     }
 
-    // --- SentrySpanListener ---
+    // --- SentryBreadcrumbListener ---
 
     public function test_sentry_listener_handles_completed_event_without_sentry(): void
     {
-        $listener = new SentrySpanListener;
+        $listener = new SentryBreadcrumbListener;
 
         $event = new AiWorkflowRequestCompleted(
             prompt: new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Test'),
@@ -56,7 +56,7 @@ class ObservabilityTest extends DatabaseTestCase
 
     public function test_sentry_listener_handles_failed_event_without_sentry(): void
     {
-        $listener = new SentrySpanListener;
+        $listener = new SentryBreadcrumbListener;
 
         $event = new AiWorkflowRequestFailed(
             prompt: new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Test'),
@@ -123,6 +123,24 @@ class ObservabilityTest extends DatabaseTestCase
         $this->createRequest(model: 'claude-4');
 
         $results = AiWorkflowRequest::query()->byModel('claude-4')->get();
+        $this->assertCount(2, $results);
+    }
+
+    public function test_request_scope_by_model_with_provider_format(): void
+    {
+        $this->createRequest(model: 'claude-4');
+        $this->createRequest(model: 'claude-4', provider: 'anthropic');
+        $this->createRequest(model: 'claude-4', provider: 'openrouter');
+
+        // Without provider prefix — matches all providers
+        $results = AiWorkflowRequest::query()->byModel('claude-4')->get();
+        $this->assertCount(3, $results);
+
+        // With provider:model format — filters on both
+        $results = AiWorkflowRequest::query()->byModel('anthropic:claude-4')->get();
+        $this->assertCount(1, $results);
+
+        $results = AiWorkflowRequest::query()->byModel('openrouter:claude-4')->get();
         $this->assertCount(2, $results);
     }
 
@@ -198,6 +216,7 @@ class ObservabilityTest extends DatabaseTestCase
      */
     private function createRequest(
         string $model = 'test-model',
+        string $provider = 'openrouter',
         string $promptId = 'test',
         ?string $error = null,
         ?array $tags = null,
@@ -205,7 +224,7 @@ class ObservabilityTest extends DatabaseTestCase
         return AiWorkflowRequest::create([
             'prompt_id' => $promptId,
             'method' => 'sendMessages',
-            'provider' => 'openrouter',
+            'provider' => $provider,
             'model' => $model,
             'system_prompt' => 'Test.',
             'messages' => [['type' => 'user', 'content' => 'Hello']],

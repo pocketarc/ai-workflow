@@ -11,12 +11,10 @@ use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Middleware\InputGuardrail;
 use AiWorkflow\Middleware\OutputGuardrail;
-use AiWorkflow\PromptData;
+use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Closure;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
-use Prism\Prism\Schema\ObjectSchema;
-use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Response;
@@ -24,26 +22,7 @@ use Prism\Prism\ValueObjects\Messages\UserMessage;
 
 class AiServiceMiddlewareTest extends TestCase
 {
-    private function makePrompt(): PromptData
-    {
-        return new PromptData(
-            id: 'test',
-            model: 'openrouter:test-model',
-            prompt: 'You are a helpful assistant.',
-        );
-    }
-
-    private function makeSchema(): ObjectSchema
-    {
-        return new ObjectSchema(
-            name: 'test',
-            description: 'A test schema',
-            properties: [
-                new StringSchema('answer', 'The answer'),
-            ],
-            requiredFields: ['answer'],
-        );
-    }
+    use MakesTestFixtures;
 
     // --- Middleware Pipeline ---
 

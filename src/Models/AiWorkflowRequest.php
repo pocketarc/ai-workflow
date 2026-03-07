@@ -32,6 +32,7 @@ use Override;
  * @property string|null $error
  * @property array<string, mixed>|null $metadata
  * @property list<string>|null $tags
+ * @property array<string, mixed>|null $template_variables
  * @property \Illuminate\Support\Carbon|null $created_at
  * @property \Illuminate\Support\Carbon|null $updated_at
  * @property-read \AiWorkflow\Models\AiWorkflowExecution|null $execution
@@ -67,6 +68,7 @@ class AiWorkflowRequest extends Model
         'error',
         'metadata',
         'tags',
+        'template_variables',
     ];
 
     /**
@@ -80,6 +82,7 @@ class AiWorkflowRequest extends Model
             'schema' => 'array',
             'metadata' => 'array',
             'tags' => 'array',
+            'template_variables' => 'array',
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
             'duration_ms' => 'integer',

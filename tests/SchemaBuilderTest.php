@@ -11,9 +11,11 @@ use AiWorkflow\SchemaBuilder;
 use AiWorkflow\Tests\Fixtures\Data\AddressData;
 use AiWorkflow\Tests\Fixtures\Data\PersonData;
 use AiWorkflow\Tests\Fixtures\Data\SentimentData;
+use AiWorkflow\Tests\Fixtures\Data\TeamData;
 use AiWorkflow\Tests\Fixtures\Data\TypedSentimentData;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\EnumSchema;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
@@ -124,6 +126,45 @@ class SchemaBuilderTest extends TestCase
         $this->assertArrayHasKey('sentiment', $array['properties']);
         $this->assertArrayHasKey('confidence', $array['properties']);
         $this->assertSame(['sentiment', 'confidence'], $array['required']);
+    }
+
+    // --- ArrayItemType ---
+
+    public function test_array_without_attribute_defaults_to_string_items(): void
+    {
+        $schema = SchemaBuilder::fromDataClass(TeamData::class);
+
+        /** @var ArraySchema $tagsSchema */
+        $tagsSchema = $schema->properties[1];
+        $this->assertInstanceOf(ArraySchema::class, $tagsSchema);
+        $this->assertSame('tags', $tagsSchema->name);
+        $this->assertInstanceOf(StringSchema::class, $tagsSchema->items);
+    }
+
+    public function test_array_with_scalar_item_type(): void
+    {
+        $schema = SchemaBuilder::fromDataClass(TeamData::class);
+
+        /** @var ArraySchema $scoresSchema */
+        $scoresSchema = $schema->properties[2];
+        $this->assertInstanceOf(ArraySchema::class, $scoresSchema);
+        $this->assertSame('scores', $scoresSchema->name);
+        $this->assertInstanceOf(NumberSchema::class, $scoresSchema->items);
+    }
+
+    public function test_array_with_data_class_item_type(): void
+    {
+        $schema = SchemaBuilder::fromDataClass(TeamData::class);
+
+        /** @var ArraySchema $membersSchema */
+        $membersSchema = $schema->properties[3];
+        $this->assertInstanceOf(ArraySchema::class, $membersSchema);
+        $this->assertSame('members', $membersSchema->name);
+        $this->assertInstanceOf(ObjectSchema::class, $membersSchema->items);
+
+        /** @var ObjectSchema $itemSchema */
+        $itemSchema = $membersSchema->items;
+        $this->assertCount(3, $itemSchema->properties);
     }
 
     // --- sendStructuredData ---

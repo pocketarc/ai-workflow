@@ -8,7 +8,10 @@ use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Prism\Prism\Structured\Response as StructuredResponse;
+use Throwable;
 
 class AiWorkflowEvalRunner
 {
@@ -30,29 +33,48 @@ class AiWorkflowEvalRunner
         AiWorkflowEvalJudge $judge,
         array $config = [],
     ): AiWorkflowEvalRun {
-        $evalRun = AiWorkflowEvalRun::create([
-            'name' => $name,
-            'models' => $models,
-            'config' => $config !== [] ? $config : null,
-        ]);
+        /** @var AiWorkflowEvalRun */
+        return DB::transaction(function () use ($name, $requests, $models, $judge, $config): AiWorkflowEvalRun {
+            $evalRun = AiWorkflowEvalRun::create([
+                'name' => $name,
+                'models' => $models,
+                'config' => $config !== [] ? $config : null,
+            ]);
 
-        foreach ($requests as $request) {
-            foreach ($models as $model) {
-                $response = $this->replayer->replay($request, model: $model);
-                $result = $judge->judge($request, $response);
+            foreach ($requests as $request) {
+                foreach ($models as $model) {
+                    try {
+                        $response = $this->replayer->replay($request, model: $model);
+                        $result = $judge->judge($request, $response);
 
-                AiWorkflowEvalScore::create([
-                    'eval_run_id' => $evalRun->id,
-                    'request_id' => $request->id,
-                    'model' => $model,
-                    'score' => $result->score,
-                    'details' => $result->details !== [] ? $result->details : null,
-                    'response_text' => $response instanceof StructuredResponse ? null : $response->text,
-                    'structured_response' => $response instanceof StructuredResponse ? $response->structured : null,
-                ]);
+                        AiWorkflowEvalScore::create([
+                            'eval_run_id' => $evalRun->id,
+                            'request_id' => $request->id,
+                            'model' => $model,
+                            'score' => $result->score,
+                            'details' => $result->details !== [] ? $result->details : null,
+                            'response_text' => $response instanceof StructuredResponse ? null : $response->text,
+                            'structured_response' => $response instanceof StructuredResponse ? $response->structured : null,
+                        ]);
+                    } catch (Throwable $e) {
+                        Log::warning('AiWorkflow: Eval replay/judge failed', [
+                            'request_id' => $request->id,
+                            'model' => $model,
+                            'error' => $e->getMessage(),
+                        ]);
+
+                        AiWorkflowEvalScore::create([
+                            'eval_run_id' => $evalRun->id,
+                            'request_id' => $request->id,
+                            'model' => $model,
+                            'score' => 0.0,
+                            'details' => ['error' => $e->getMessage()],
+                        ]);
+                    }
+                }
             }
-        }
 
-        return $evalRun->load('scores');
+            return $evalRun->load('scores');
+        });
     }
 }

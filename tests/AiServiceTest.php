@@ -6,6 +6,7 @@ namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
 use AiWorkflow\PromptData;
+use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Illuminate\Support\Collection;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Enums\Provider as ProviderEnum;
@@ -15,8 +16,6 @@ use Prism\Prism\Facades\Prism;
 use Prism\Prism\Facades\Tool;
 use Prism\Prism\PrismManager;
 use Prism\Prism\Providers\Provider;
-use Prism\Prism\Schema\ObjectSchema;
-use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Streaming\Events\StreamEndEvent;
 use Prism\Prism\Structured\Request as StructuredRequest;
 use Prism\Prism\Structured\Response as StructuredResponse;
@@ -32,18 +31,7 @@ use RuntimeException;
 
 class AiServiceTest extends TestCase
 {
-    private function makePrompt(
-        string $id = 'test',
-        string $model = 'openrouter:test-model',
-        ?string $fallbackModel = null,
-    ): PromptData {
-        return new PromptData(
-            id: $id,
-            model: $model,
-            prompt: 'You are a helpful assistant.',
-            fallbackModel: $fallbackModel,
-        );
-    }
+    use MakesTestFixtures;
 
     private function makeTextResponse(
         string $text = 'Hello from AI',
@@ -58,18 +46,6 @@ class AiServiceTest extends TestCase
             usage: new Usage(100, 50),
             meta: new Meta('test-model', 'test-id'),
             messages: new Collection,
-        );
-    }
-
-    private function makeSchema(): ObjectSchema
-    {
-        return new ObjectSchema(
-            name: 'test',
-            description: 'A test schema',
-            properties: [
-                new StringSchema('answer', 'The answer'),
-            ],
-            requiredFields: ['answer'],
         );
     }
 

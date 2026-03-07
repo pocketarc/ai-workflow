@@ -6,7 +6,7 @@ namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
 use AiWorkflow\AiWorkflowCache;
-use AiWorkflow\PromptData;
+use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ObjectSchema;
@@ -17,22 +17,14 @@ use Prism\Prism\ValueObjects\Messages\UserMessage;
 
 class AiWorkflowCacheTest extends TestCase
 {
+    use MakesTestFixtures;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         config()->set('ai-workflow.cache.enabled', true);
         config()->set('ai-workflow.cache.store', 'array');
-    }
-
-    private function makePrompt(?int $cacheTtl = 3600): PromptData
-    {
-        return new PromptData(
-            id: 'test',
-            model: 'openrouter:test-model',
-            prompt: 'You are a helpful assistant.',
-            cacheTtl: $cacheTtl,
-        );
     }
 
     public function test_deterministic_key_generation(): void
@@ -66,7 +58,7 @@ class AiWorkflowCacheTest extends TestCase
         ]);
 
         $service = app(AiService::class);
-        $prompt = $this->makePrompt();
+        $prompt = $this->makePrompt(cacheTtl: 3600);
 
         // First call — cache miss, hits Prism.
         $response1 = $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
@@ -88,7 +80,7 @@ class AiWorkflowCacheTest extends TestCase
         ]);
 
         $service = app(AiService::class);
-        $prompt = $this->makePrompt();
+        $prompt = $this->makePrompt(cacheTtl: 3600);
 
         $response1 = $service->sendStructuredMessages(collect([new UserMessage('Hello')]), $prompt, $schema);
         $this->assertSame(['answer' => 'cached'], $response1->structured);
@@ -106,7 +98,7 @@ class AiWorkflowCacheTest extends TestCase
         ]);
 
         $service = app(AiService::class);
-        $prompt = $this->makePrompt();
+        $prompt = $this->makePrompt(cacheTtl: 3600);
 
         $response1 = $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
         $response2 = $service->sendMessages(collect([new UserMessage('Goodbye')]), $prompt);
@@ -142,7 +134,7 @@ class AiWorkflowCacheTest extends TestCase
         ]);
 
         $service = app(AiService::class);
-        $prompt = $this->makePrompt();
+        $prompt = $this->makePrompt(cacheTtl: 3600);
 
         $response1 = $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
         $response2 = $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);

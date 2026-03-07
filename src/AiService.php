@@ -768,6 +768,7 @@ class AiService
             'schema' => $schema?->toArray(),
             'error' => $error?->getMessage(),
             'tags' => $this->resolveTags($prompt),
+            'template_variables' => $prompt->variables !== [] ? $prompt->variables : null,
         ]);
     }
 
@@ -803,6 +804,7 @@ class AiService
             'output_tokens' => $endEvent->usage?->completionTokens,
             'duration_ms' => (int) $durationMs,
             'tags' => $this->resolveTags($prompt),
+            'template_variables' => $prompt->variables !== [] ? $prompt->variables : null,
         ]);
     }
 

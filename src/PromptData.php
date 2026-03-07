@@ -8,6 +8,7 @@ class PromptData
 {
     /**
      * @param  list<string>  $tags
+     * @param  array<string, mixed>  $variables
      */
     public function __construct(
         public readonly string $id,
@@ -17,6 +18,7 @@ class PromptData
         public readonly ?string $rawTemplate = null,
         public readonly array $tags = [],
         public readonly ?int $cacheTtl = null,
+        public readonly array $variables = [],
     ) {}
 
     /**

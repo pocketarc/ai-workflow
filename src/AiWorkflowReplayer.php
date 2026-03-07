@@ -8,6 +8,10 @@ use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Prism\Prism\Contracts\Message;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Schema\ArraySchema;
+use Prism\Prism\Schema\BooleanSchema;
+use Prism\Prism\Schema\EnumSchema;
+use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Structured\Response as StructuredResponse;
@@ -34,7 +38,9 @@ class AiWorkflowReplayer
         $replayModel = $request->model;
 
         if ($useCurrentPrompts) {
-            $prompt = $this->promptService->load($request->prompt_id);
+            /** @var array<string, mixed> $templateVariables */
+            $templateVariables = $request->template_variables ?? [];
+            $prompt = $this->promptService->load($request->prompt_id, $templateVariables);
             $systemPrompt = $prompt->prompt;
 
             if ($model === null) {
@@ -205,10 +211,19 @@ class AiWorkflowReplayer
             $description = is_string($prop['description'] ?? null) ? $prop['description'] : '';
             $type = is_string($prop['type'] ?? null) ? $prop['type'] : 'string';
 
-            $properties[] = match ($type) {
-                'object' => $this->buildObjectSchema(array_merge($prop, ['name' => $name])),
-                default => new StringSchema($name, $description),
-            };
+            if (isset($prop['enum']) && is_array($prop['enum'])) {
+                /** @var list<string|int> $enumValues */
+                $enumValues = $prop['enum'];
+                $properties[] = new EnumSchema($name, $description, $enumValues);
+            } else {
+                $properties[] = match ($type) {
+                    'object' => $this->buildObjectSchema(array_merge($prop, ['name' => $name])),
+                    'integer', 'number' => new NumberSchema($name, $description),
+                    'boolean' => new BooleanSchema($name, $description),
+                    'array' => new ArraySchema($name, $description, new StringSchema('item', '')),
+                    default => new StringSchema($name, $description),
+                };
+            }
         }
 
         $schemaName = is_string($data['name'] ?? null) ? $data['name'] : 'schema';

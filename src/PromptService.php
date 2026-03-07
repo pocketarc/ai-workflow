@@ -59,6 +59,7 @@ class PromptService
             rawTemplate: $rawTemplate,
             tags: $parsedTags,
             cacheTtl: is_int($cacheTtl) ? $cacheTtl : null,
+            variables: $variables,
         );
     }
 

@@ -8,10 +8,9 @@ use AiWorkflow\AiService;
 use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
+use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
-use Prism\Prism\Schema\ObjectSchema;
-use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
@@ -20,26 +19,7 @@ use Prism\Prism\ValueObjects\Messages\UserMessage;
 
 class AiWorkflowReplayerTest extends DatabaseTestCase
 {
-    private function makePrompt(string $id = 'test_prompt', string $model = 'openrouter:test-model'): PromptData
-    {
-        return new PromptData(
-            id: $id,
-            model: $model,
-            prompt: 'You are a helpful assistant.',
-        );
-    }
-
-    private function makeSchema(): ObjectSchema
-    {
-        return new ObjectSchema(
-            name: 'test',
-            description: 'A test schema',
-            properties: [
-                new StringSchema('answer', 'The answer'),
-            ],
-            requiredFields: ['answer'],
-        );
-    }
+    use MakesTestFixtures;
 
     public function test_replay_text_request(): void
     {
@@ -257,5 +237,181 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
         $this->assertCount(2, $results);
         $this->assertSame('Replay 1', $results[0]->text);
         $this->assertSame('Replay 2', $results[1]->text);
+    }
+
+    // --- Schema reconstruction type mapping ---
+
+    public function test_replay_structured_reconstructs_number_types(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['count' => 5, 'ratio' => 0.5])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'test',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'Test.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+            'schema' => [
+                'type' => 'object',
+                'name' => 'stats',
+                'description' => 'Statistics',
+                'properties' => [
+                    'count' => ['type' => 'integer', 'description' => 'Count'],
+                    'ratio' => ['type' => 'number', 'description' => 'Ratio'],
+                ],
+                'required' => ['count', 'ratio'],
+            ],
+        ]);
+
+        $replayer = app(AiWorkflowReplayer::class);
+        $result = $replayer->replay($request);
+
+        $this->assertInstanceOf(StructuredResponse::class, $result);
+        $this->assertSame(5, $result->structured['count']);
+    }
+
+    public function test_replay_structured_reconstructs_boolean_type(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['active' => true])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'test',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'Test.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+            'schema' => [
+                'type' => 'object',
+                'name' => 'status',
+                'description' => 'Status check',
+                'properties' => [
+                    'active' => ['type' => 'boolean', 'description' => 'Is active'],
+                ],
+                'required' => ['active'],
+            ],
+        ]);
+
+        $replayer = app(AiWorkflowReplayer::class);
+        $result = $replayer->replay($request);
+
+        $this->assertInstanceOf(StructuredResponse::class, $result);
+        $this->assertTrue($result->structured['active']);
+    }
+
+    public function test_replay_structured_reconstructs_array_type(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['items' => ['a', 'b']])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'test',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'Test.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+            'schema' => [
+                'type' => 'object',
+                'name' => 'list',
+                'description' => 'Item list',
+                'properties' => [
+                    'items' => ['type' => 'array', 'description' => 'Items'],
+                ],
+                'required' => ['items'],
+            ],
+        ]);
+
+        $replayer = app(AiWorkflowReplayer::class);
+        $result = $replayer->replay($request);
+
+        $this->assertInstanceOf(StructuredResponse::class, $result);
+        $this->assertSame(['a', 'b'], $result->structured['items']);
+    }
+
+    public function test_replay_structured_reconstructs_enum_type(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['status' => 'active'])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'test',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'Test.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+            'schema' => [
+                'type' => 'object',
+                'name' => 'record',
+                'description' => 'A record',
+                'properties' => [
+                    'status' => ['type' => 'string', 'description' => 'Status', 'enum' => ['active', 'inactive', 'pending']],
+                ],
+                'required' => ['status'],
+            ],
+        ]);
+
+        $replayer = app(AiWorkflowReplayer::class);
+        $result = $replayer->replay($request);
+
+        $this->assertInstanceOf(StructuredResponse::class, $result);
+        $this->assertSame('active', $result->structured['status']);
+    }
+
+    // --- Template variables for faithful replay ---
+
+    public function test_replay_with_current_prompts_uses_stored_template_variables(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Original')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $prompt = new PromptData(
+            id: 'template_prompt',
+            model: 'openrouter:old-model',
+            prompt: 'You are helping Jane with their Premium subscription.',
+            variables: ['customer_name' => 'Jane', 'product' => 'Premium'],
+        );
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+
+        $recorded = AiWorkflowRequest::first();
+        $this->assertNotNull($recorded);
+        $this->assertSame(['customer_name' => 'Jane', 'product' => 'Premium'], $recorded->template_variables);
+
+        // Replay with current prompts — should re-render the template with stored variables
+        Prism::fake([
+            TextResponseFake::make()->withText('Replayed with vars')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $replayer = app(AiWorkflowReplayer::class);
+        $result = $replayer->replay($recorded, useCurrentPrompts: true);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame('Replayed with vars', $result->text);
     }
 }

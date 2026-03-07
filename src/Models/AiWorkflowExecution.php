@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace AiWorkflow\Models;
 
 use AiWorkflow\Models\Builders\AiWorkflowExecutionBuilder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Override;
+use stdClass;
 
 /**
  * @method static AiWorkflowExecutionBuilder<AiWorkflowExecution> newModelQuery()
@@ -18,6 +20,12 @@ use Override;
  * @property string $id
  * @property string $name
  * @property array<string, mixed>|null $metadata
+ * @property-read stdClass $request_stats
+ * @property-read int $total_input_tokens
+ * @property-read int $total_output_tokens
+ * @property-read int $total_tokens
+ * @property-read int $total_duration_ms
+ * @property-read int $request_count
  * @property \Illuminate\Support\Carbon|null $created_at
  * @property \Illuminate\Support\Carbon|null $updated_at
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \AiWorkflow\Models\AiWorkflowRequest> $requests
@@ -67,28 +75,71 @@ class AiWorkflowExecution extends Model
         return $this->hasMany(AiWorkflowRequest::class, 'execution_id');
     }
 
-    public function totalInputTokens(): int
+    /**
+     * @return Attribute<stdClass, never>
+     */
+    protected function requestStats(): Attribute
     {
-        return (int) $this->requests()->sum('input_tokens');
+        return Attribute::make(get: fn (): stdClass => $this->requests()
+            ->toBase()
+            ->selectRaw('COALESCE(SUM(input_tokens), 0) as total_input, COALESCE(SUM(output_tokens), 0) as total_output, COALESCE(SUM(duration_ms), 0) as total_duration, COUNT(*) as total_count')
+            ->first() ?? (object) ['total_input' => 0, 'total_output' => 0, 'total_duration' => 0, 'total_count' => 0]
+        );
     }
 
-    public function totalOutputTokens(): int
+    /**
+     * @return Attribute<int, never>
+     */
+    protected function totalInputTokens(): Attribute
     {
-        return (int) $this->requests()->sum('output_tokens');
+        return Attribute::make(get: function (): int {
+            $value = $this->request_stats->total_input;
+
+            return is_numeric($value) ? (int) $value : 0;
+        });
     }
 
-    public function totalTokens(): int
+    /**
+     * @return Attribute<int, never>
+     */
+    protected function totalOutputTokens(): Attribute
     {
-        return $this->totalInputTokens() + $this->totalOutputTokens();
+        return Attribute::make(get: function (): int {
+            $value = $this->request_stats->total_output;
+
+            return is_numeric($value) ? (int) $value : 0;
+        });
     }
 
-    public function totalDurationMs(): int
+    /**
+     * @return Attribute<int, never>
+     */
+    protected function totalTokens(): Attribute
     {
-        return (int) $this->requests()->sum('duration_ms');
+        return Attribute::make(get: fn (): int => $this->total_input_tokens + $this->total_output_tokens);
     }
 
-    public function requestCount(): int
+    /**
+     * @return Attribute<int, never>
+     */
+    protected function totalDurationMs(): Attribute
     {
-        return $this->requests()->count();
+        return Attribute::make(get: function (): int {
+            $value = $this->request_stats->total_duration;
+
+            return is_numeric($value) ? (int) $value : 0;
+        });
+    }
+
+    /**
+     * @return Attribute<int, never>
+     */
+    protected function requestCount(): Attribute
+    {
+        return Attribute::make(get: function (): int {
+            $value = $this->request_stats->total_count;
+
+            return is_numeric($value) ? (int) $value : 0;
+        });
     }
 }

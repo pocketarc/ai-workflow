@@ -7,15 +7,7 @@ namespace AiWorkflow\Listeners;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
 
-/**
- * Adds Sentry breadcrumbs for AI workflow requests.
- *
- * Register in your EventServiceProvider:
- *
- *   AiWorkflowRequestCompleted::class => [SentrySpanListener::class . '@handleCompleted'],
- *   AiWorkflowRequestFailed::class => [SentrySpanListener::class . '@handleFailed'],
- */
-class SentrySpanListener
+class SentryBreadcrumbListener
 {
     public function handleCompleted(AiWorkflowRequestCompleted $event): void
     {

@@ -38,6 +38,7 @@ return new class extends Migration
             $table->text('error')->nullable();
             $table->json('metadata')->nullable();
             $table->json('tags')->nullable();
+            $table->json('template_variables')->nullable();
             $table->timestamps();
 
             $table->foreign('execution_id')
@@ -64,7 +65,7 @@ return new class extends Migration
             $table->uuid('eval_run_id');
             $table->unsignedBigInteger('request_id');
             $table->string('model');
-            $table->float('score');
+            $table->decimal('score', 5, 4);
             $table->json('details')->nullable();
             $table->text('response_text')->nullable();
             $table->json('structured_response')->nullable();

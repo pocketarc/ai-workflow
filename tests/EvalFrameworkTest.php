@@ -126,7 +126,7 @@ class EvalFrameworkTest extends DatabaseTestCase
 
         $scoreA = $evalRun->scores->where('model', 'openrouter:model-a')->first();
         $this->assertNotNull($scoreA);
-        $this->assertSame(0.9, $scoreA->score);
+        $this->assertEqualsWithDelta(0.9, (float) $scoreA->score, 0.0001);
         $this->assertSame('Hello world', $scoreA->response_text);
     }
 
@@ -215,6 +215,56 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertSame(['tag' => 'classification'], $evalRun->config);
     }
 
+    public function test_eval_runner_handles_partial_failure(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Good response')
+                ->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()
+                ->withText('Good response')
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createTextRequest(responseText: 'Original');
+
+        $callCount = 0;
+        $judge = new class($callCount) implements AiWorkflowEvalJudge
+        {
+            public function __construct(private int &$callCount) {}
+
+            public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
+            {
+                $this->callCount++;
+                if ($this->callCount === 1) {
+                    throw new \RuntimeException('Judge exploded');
+                }
+
+                return new AiWorkflowEvalResult(0.8);
+            }
+        };
+
+        $runner = app(AiWorkflowEvalRunner::class);
+        $evalRun = $runner->run(
+            name: 'Partial failure eval',
+            requests: [$request],
+            models: ['openrouter:model-a', 'openrouter:model-b'],
+            judge: $judge,
+        );
+
+        // Both scores created — first failed with 0.0, second succeeded
+        $this->assertCount(2, $evalRun->scores);
+
+        $scoreA = $evalRun->scores->where('model', 'openrouter:model-a')->first();
+        $this->assertNotNull($scoreA);
+        $this->assertEqualsWithDelta(0.0, (float) $scoreA->score, 0.0001);
+        $this->assertSame('Judge exploded', $scoreA->details['error'] ?? null);
+
+        $scoreB = $evalRun->scores->where('model', 'openrouter:model-b')->first();
+        $this->assertNotNull($scoreB);
+        $this->assertEqualsWithDelta(0.8, (float) $scoreB->score, 0.0001);
+    }
+
     public function test_eval_runner_with_custom_judge(): void
     {
         Prism::fake([
@@ -235,7 +285,7 @@ class EvalFrameworkTest extends DatabaseTestCase
 
         $score = $evalRun->scores->first();
         $this->assertNotNull($score);
-        $this->assertSame(0.75, $score->score);
+        $this->assertEqualsWithDelta(0.75, (float) $score->score, 0.0001);
         $this->assertSame(['custom' => true], $score->details);
     }
 
