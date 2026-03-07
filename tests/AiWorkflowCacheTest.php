@@ -14,6 +14,8 @@ use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Prism\Prism\ValueObjects\Meta;
+use Prism\Prism\ValueObjects\Usage;
 
 class AiWorkflowCacheTest extends TestCase
 {
@@ -141,5 +143,62 @@ class AiWorkflowCacheTest extends TestCase
 
         $this->assertSame('First', $response1->text);
         $this->assertSame('Second', $response2->text);
+    }
+
+    public function test_cache_hit_preserves_text_usage_and_meta(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Response with meta')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50))
+                ->withMeta(new Meta('request-123', 'gpt-4')),
+        ]);
+
+        $service = app(AiService::class);
+        $prompt = $this->makePrompt(cacheTtl: 3600);
+
+        $response1 = $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+        $this->assertSame(100, $response1->usage->promptTokens);
+        $this->assertSame(50, $response1->usage->completionTokens);
+        $this->assertSame('request-123', $response1->meta->id);
+        $this->assertSame('gpt-4', $response1->meta->model);
+
+        // Cache hit should preserve usage and meta.
+        $response2 = $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+        $this->assertSame('Response with meta', $response2->text);
+        $this->assertSame(100, $response2->usage->promptTokens);
+        $this->assertSame(50, $response2->usage->completionTokens);
+        $this->assertSame('request-123', $response2->meta->id);
+        $this->assertSame('gpt-4', $response2->meta->model);
+    }
+
+    public function test_cache_hit_preserves_structured_usage_and_meta(): void
+    {
+        $schema = new ObjectSchema('test', 'desc', [new StringSchema('answer', 'The answer')], ['answer']);
+
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'cached'])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(200, 100))
+                ->withMeta(new Meta('req-456', 'claude-4')),
+        ]);
+
+        $service = app(AiService::class);
+        $prompt = $this->makePrompt(cacheTtl: 3600);
+
+        $response1 = $service->sendStructuredMessages(collect([new UserMessage('Hello')]), $prompt, $schema);
+        $this->assertSame(200, $response1->usage->promptTokens);
+        $this->assertSame(100, $response1->usage->completionTokens);
+        $this->assertSame('req-456', $response1->meta->id);
+
+        // Cache hit should preserve usage and meta.
+        $response2 = $service->sendStructuredMessages(collect([new UserMessage('Hello')]), $prompt, $schema);
+        $this->assertSame(['answer' => 'cached'], $response2->structured);
+        $this->assertSame(200, $response2->usage->promptTokens);
+        $this->assertSame(100, $response2->usage->completionTokens);
+        $this->assertSame('req-456', $response2->meta->id);
+        $this->assertSame('claude-4', $response2->meta->model);
     }
 }

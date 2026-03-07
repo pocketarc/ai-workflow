@@ -157,6 +157,18 @@ class AiService
     }
 
     /**
+     * Reset all mutable state on the service instance.
+     */
+    public function flush(): void
+    {
+        $this->context = [];
+        $this->tags = [];
+        $this->middleware = [];
+        $this->toolResolver = null;
+        $this->currentExecution = null;
+    }
+
+    /**
      * Send messages to the AI with conversation history and tools.
      *
      * @param  Collection<int, Message>  $messages
@@ -165,23 +177,22 @@ class AiService
         Collection $messages,
         PromptData $prompt,
         ?PromptData $extraContext = null,
-        int $steps = 15,
+        ?int $steps = null,
     ): Response {
         [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
         $extraPrompt = $extraContext !== null ? $extraContext->prompt : '';
         $systemPrompt = trim($extraPrompt."\n\n".$prompt->prompt);
         $retryAttempts = 0;
+        $configSteps = config('ai-workflow.max_steps', 15);
+        $steps ??= is_int($configSteps) ? $configSteps : 15;
 
         $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
         if ($cached !== null) {
             return $cached;
         }
 
-        /** @var array{text: int, structured: int} $maxTokens */
-        $maxTokens = config('ai-workflow.max_tokens');
-
-        /** @var array<string, mixed> $clientOptions */
-        $clientOptions = config('ai-workflow.client_options');
+        $maxTokens = $this->maxTokens();
+        $clientOptions = $this->clientOptions();
 
         $context = new AiWorkflowContext(
             messages: array_values($messages->all()),
@@ -289,23 +300,7 @@ class AiService
             return $response;
         } catch (PrismStructuredDecodingException $decodingException) {
             if ($modelOverride === null && $prompt->fallbackModel !== null) {
-                Log::warning('AiWorkflow: Structured decoding failed, switching to fallback model', [
-                    'prompt_id' => $prompt->id,
-                    'primary_model' => $model,
-                    'fallback_model' => $prompt->fallbackModel,
-                ]);
-
-                [$fallbackProvider, $fallbackModel] = PromptData::parseModelIdentifier($prompt->fallbackModel);
-
-                $fallbackStartTime = microtime(true);
-                $response = $this->executeStructuredRequest($messages, $prompt, $schema, $prompt->fallbackModel);
-                $fallbackDurationMs = (microtime(true) - $fallbackStartTime) * 1000;
-
-                $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessages');
-                $this->logRequest($prompt, 'sendStructuredMessages', $fallbackProvider, $fallbackModel, $prompt->prompt, $messages->all(), $fallbackDurationMs, structuredResponse: $response, schema: $schema);
-                $this->dispatchCompletedEvent($prompt, 'sendStructuredMessages', $fallbackModel, $response->finishReason, $response->usage, $fallbackDurationMs);
-
-                return $response;
+                return $this->handleStructuredFallback($prompt, $schema, $messages, 'sendStructuredMessages', $prompt->prompt);
             }
 
             $durationMs = (microtime(true) - $startTime) * 1000;
@@ -360,7 +355,7 @@ class AiService
         $startTime = microtime(true);
 
         try {
-            $response = $this->executeStructuredRequestWithoutSystemPrompt($schema, $newMessages, $prompt->model, $prompt);
+            $response = $this->executeStructuredRequest($newMessages, $prompt, $schema, $prompt->model);
             $durationMs = (microtime(true) - $startTime) * 1000;
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessagesWithTools');
@@ -370,23 +365,7 @@ class AiService
             return $response;
         } catch (PrismStructuredDecodingException $decodingException) {
             if ($prompt->fallbackModel !== null) {
-                Log::warning('AiWorkflow: Structured decoding failed, switching to fallback model', [
-                    'prompt_id' => $prompt->id,
-                    'primary_model' => $model,
-                    'fallback_model' => $prompt->fallbackModel,
-                ]);
-
-                [$fallbackProvider, $fallbackModel] = PromptData::parseModelIdentifier($prompt->fallbackModel);
-
-                $fallbackStartTime = microtime(true);
-                $response = $this->executeStructuredRequestWithoutSystemPrompt($schema, $newMessages, $prompt->fallbackModel, $prompt);
-                $fallbackDurationMs = (microtime(true) - $fallbackStartTime) * 1000;
-
-                $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessagesWithTools');
-                $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $fallbackProvider, $fallbackModel, '', $newMessages->all(), $fallbackDurationMs, structuredResponse: $response, schema: $schema);
-                $this->dispatchCompletedEvent($prompt, 'sendStructuredMessagesWithTools', $fallbackModel, $response->finishReason, $response->usage, $fallbackDurationMs);
-
-                return $response;
+                return $this->handleStructuredFallback($prompt, $schema, $newMessages, 'sendStructuredMessagesWithTools', null);
             }
 
             $durationMs = (microtime(true) - $startTime) * 1000;
@@ -464,17 +443,16 @@ class AiService
         Collection $messages,
         PromptData $prompt,
         ?PromptData $extraContext = null,
-        int $steps = 15,
+        ?int $steps = null,
     ): Generator {
         [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
         $extraPrompt = $extraContext !== null ? $extraContext->prompt : '';
         $systemPrompt = trim($extraPrompt."\n\n".$prompt->prompt);
+        $configSteps = config('ai-workflow.max_steps', 15);
+        $steps ??= is_int($configSteps) ? $configSteps : 15;
 
-        /** @var array{text: int, structured: int} $maxTokens */
-        $maxTokens = config('ai-workflow.max_tokens');
-
-        /** @var array<string, mixed> $clientOptions */
-        $clientOptions = config('ai-workflow.client_options');
+        $maxTokens = $this->maxTokens();
+        $clientOptions = $this->clientOptions();
 
         $startTime = microtime(true);
 
@@ -488,21 +466,33 @@ class AiService
             ->withClientOptions($clientOptions)
             ->asStream();
 
-        foreach ($stream as $event) {
-            yield $event;
+        try {
+            foreach ($stream as $event) {
+                yield $event;
 
-            if ($event instanceof StreamEndEvent) {
-                $durationMs = (microtime(true) - $startTime) * 1000;
+                if ($event instanceof StreamEndEvent) {
+                    $durationMs = (microtime(true) - $startTime) * 1000;
 
-                $this->logUnexpectedFinishReason($event->finishReason, $prompt, 'streamMessages');
-                $this->logStreamRequest($prompt, $provider, $model, $systemPrompt, $messages->all(), $event, $durationMs);
-                $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $event->finishReason, $event->usage ?? new Usage(0, 0), $durationMs);
+                    $this->logUnexpectedFinishReason($event->finishReason, $prompt, 'streamMessages');
+                    $this->logStreamRequest($prompt, $provider, $model, $systemPrompt, $messages->all(), $event, $durationMs);
+                    $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $event->finishReason, $event->usage ?? new Usage(0, 0), $durationMs);
+                }
             }
+        } catch (Throwable $exception) {
+            $durationMs = (microtime(true) - $startTime) * 1000;
+            $this->logRequest($prompt, 'streamMessages', $provider, $model, $systemPrompt, $messages->all(), $durationMs, error: $exception);
+            $this->dispatchFailedEvent($prompt, 'streamMessages', $model, $exception, $durationMs);
+
+            throw $exception;
         }
     }
 
     /**
      * Execute a structured Prism request with retry logic.
+     *
+     * When $systemPrompt is non-null, it is applied to the request.
+     * When null, no system prompt is set (used by sendStructuredMessagesWithTools
+     * where the second step is purely "parse this text into JSON").
      *
      * @param  Collection<int, Message>  $messages
      */
@@ -515,51 +505,10 @@ class AiService
     ): StructuredResponse {
         [$provider, $model] = PromptData::parseModelIdentifier($modelIdentifier);
 
-        /** @var array{text: int, structured: int} $maxTokens */
-        $maxTokens = config('ai-workflow.max_tokens');
+        $maxTokens = $this->maxTokens();
+        $clientOptions = $this->clientOptions();
 
-        /** @var array<string, mixed> $clientOptions */
-        $clientOptions = config('ai-workflow.client_options');
-
-        return Prism::structured()
-            ->using($provider, $model)
-            ->withSystemPrompt($systemPrompt ?? $prompt->prompt)
-            ->withSchema($schema)
-            ->withMessages($messages->all())
-            ->withMaxTokens($maxTokens['structured'])
-            ->withClientOptions($clientOptions)
-            ->withClientRetry(
-                times: $this->retryTimes(),
-                sleepMilliseconds: $this->retrySleep(),
-                when: $this->retryWhen(),
-            )
-            ->asStructured();
-    }
-
-    /**
-     * Execute a structured Prism request without system prompt.
-     *
-     * Used by sendStructuredMessagesWithTools() where the second step is purely
-     * "parse this text into JSON" — the domain-specific system prompt would
-     * add noise and token cost without helping the structured extraction.
-     *
-     * @param  Collection<int, Message>  $messages
-     */
-    private function executeStructuredRequestWithoutSystemPrompt(
-        ObjectSchema $schema,
-        Collection $messages,
-        string $modelIdentifier,
-        PromptData $prompt,
-    ): StructuredResponse {
-        [$provider, $model] = PromptData::parseModelIdentifier($modelIdentifier);
-
-        /** @var array{text: int, structured: int} $maxTokens */
-        $maxTokens = config('ai-workflow.max_tokens');
-
-        /** @var array<string, mixed> $clientOptions */
-        $clientOptions = config('ai-workflow.client_options');
-
-        return Prism::structured()
+        $builder = Prism::structured()
             ->using($provider, $model)
             ->withSchema($schema)
             ->withMessages($messages->all())
@@ -569,8 +518,13 @@ class AiService
                 times: $this->retryTimes(),
                 sleepMilliseconds: $this->retrySleep(),
                 when: $this->retryWhen(),
-            )
-            ->asStructured();
+            );
+
+        if ($systemPrompt !== null) {
+            $builder = $builder->withSystemPrompt($systemPrompt);
+        }
+
+        return $builder->asStructured();
     }
 
     /**
@@ -600,17 +554,66 @@ class AiService
      */
     private function resolveMiddleware(): array
     {
-        /** @var list<class-string<AiWorkflowMiddleware>> $global */
-        $global = config('ai-workflow.middleware', []);
+        $configMiddleware = config('ai-workflow.middleware', []);
+        $global = is_array($configMiddleware) ? $configMiddleware : [];
 
         $resolved = [];
         foreach ($global as $className) {
-            /** @var AiWorkflowMiddleware $instance */
-            $instance = app($className);
-            $resolved[] = $instance;
+            if (is_string($className)) {
+                $instance = app($className);
+                if ($instance instanceof AiWorkflowMiddleware) {
+                    $resolved[] = $instance;
+                }
+            }
         }
 
         return [...$resolved, ...$this->middleware];
+    }
+
+    /**
+     * @return array{text: int, structured: int}
+     */
+    private function maxTokens(): array
+    {
+        $config = config('ai-workflow.max_tokens');
+        if (! is_array($config)) {
+            return ['text' => 16_384, 'structured' => 32_768];
+        }
+
+        return [
+            'text' => is_int($config['text'] ?? null) ? $config['text'] : 16_384,
+            'structured' => is_int($config['structured'] ?? null) ? $config['structured'] : 32_768,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function clientOptions(): array
+    {
+        $config = config('ai-workflow.client_options');
+
+        /** @var array<string, mixed> */
+        return is_array($config) ? $config : [];
+    }
+
+    /**
+     * @return array{times: int, rate_limit_delay_ms: int, server_error_multiplier_ms: int, default_multiplier_ms: int, jitter: bool}
+     */
+    private function retryConfig(): array
+    {
+        $config = config('ai-workflow.retry');
+        if (! is_array($config)) {
+            return ['times' => 3, 'rate_limit_delay_ms' => 30_000, 'server_error_multiplier_ms' => 2_000, 'default_multiplier_ms' => 1_000, 'jitter' => true];
+        }
+
+        return [
+            'times' => is_int($config['times'] ?? null) ? $config['times'] : 3,
+            'rate_limit_delay_ms' => is_int($config['rate_limit_delay_ms'] ?? null) ? $config['rate_limit_delay_ms'] : 30_000,
+            'server_error_multiplier_ms' => is_int($config['server_error_multiplier_ms'] ?? null) ? $config['server_error_multiplier_ms'] : 2_000,
+            'default_multiplier_ms' => is_int($config['default_multiplier_ms'] ?? null) ? $config['default_multiplier_ms'] : 1_000,
+            'jitter' => is_bool($config['jitter'] ?? null) ? $config['jitter'] : true,
+        ];
     }
 
     /**
@@ -618,10 +621,7 @@ class AiService
      */
     private function retryTimes(): int
     {
-        /** @var array{times: int, rate_limit_delay_ms: int, server_error_multiplier_ms: int, default_multiplier_ms: int, jitter: bool} $retryConfig */
-        $retryConfig = config('ai-workflow.retry');
-
-        return $retryConfig['times'];
+        return $this->retryConfig()['times'];
     }
 
     /**
@@ -629,8 +629,7 @@ class AiService
      */
     private function retrySleep(?int &$retryAttempts = null): Closure
     {
-        /** @var array{times: int, rate_limit_delay_ms: int, server_error_multiplier_ms: int, default_multiplier_ms: int, jitter: bool} $retryConfig */
-        $retryConfig = config('ai-workflow.retry');
+        $retryConfig = $this->retryConfig();
 
         return function (int $attempt, Throwable $exception) use (&$retryAttempts, $retryConfig): int {
             if ($retryAttempts !== null) {
@@ -711,10 +710,7 @@ class AiService
 
     private function isLoggingEnabled(): bool
     {
-        /** @var array{enabled: bool} $loggingConfig */
-        $loggingConfig = config('ai-workflow.logging');
-
-        return $loggingConfig['enabled'];
+        return (bool) config('ai-workflow.logging.enabled');
     }
 
     /**
@@ -826,11 +822,19 @@ class AiService
         $text = is_string($data['text'] ?? null) ? $data['text'] : '';
         $finishReason = is_string($data['finish_reason'] ?? null) ? FinishReason::from($data['finish_reason']) : FinishReason::Stop;
 
+        $usage = is_array($data['usage'] ?? null) ? $data['usage'] : [];
+        $promptTokens = is_int($usage['prompt_tokens'] ?? null) ? $usage['prompt_tokens'] : 0;
+        $completionTokens = is_int($usage['completion_tokens'] ?? null) ? $usage['completion_tokens'] : 0;
+
+        $meta = is_array($data['meta'] ?? null) ? $data['meta'] : [];
+        $metaId = is_string($meta['id'] ?? null) ? $meta['id'] : '';
+        $metaModel = is_string($meta['model'] ?? null) ? $meta['model'] : $model;
+
         /** @var Collection<int, \Prism\Prism\Text\Step> $steps */
         $steps = collect([]);
 
-        /** @var Collection<int, Message> $messages */
-        $messages = collect([]);
+        /** @var Collection<int, Message> $responseMessages */
+        $responseMessages = collect([]);
 
         return new Response(
             steps: $steps,
@@ -838,9 +842,9 @@ class AiService
             finishReason: $finishReason,
             toolCalls: [],
             toolResults: [],
-            usage: new Usage(0, 0),
-            meta: new Meta(id: '', model: $model),
-            messages: $messages,
+            usage: new Usage($promptTokens, $completionTokens),
+            meta: new Meta(id: $metaId, model: $metaModel),
+            messages: $responseMessages,
         );
     }
 
@@ -857,6 +861,14 @@ class AiService
         $this->cache->put($key, [
             'text' => $response->text,
             'finish_reason' => $response->finishReason->value,
+            'usage' => [
+                'prompt_tokens' => $response->usage->promptTokens,
+                'completion_tokens' => $response->usage->completionTokens,
+            ],
+            'meta' => [
+                'id' => $response->meta->id,
+                'model' => $response->meta->model,
+            ],
         ], $prompt->cacheTtl);
     }
 
@@ -879,6 +891,14 @@ class AiService
         $structured = is_array($data['structured'] ?? null) ? $data['structured'] : [];
         $finishReason = is_string($data['finish_reason'] ?? null) ? FinishReason::from($data['finish_reason']) : FinishReason::Stop;
 
+        $usage = is_array($data['usage'] ?? null) ? $data['usage'] : [];
+        $promptTokens = is_int($usage['prompt_tokens'] ?? null) ? $usage['prompt_tokens'] : 0;
+        $completionTokens = is_int($usage['completion_tokens'] ?? null) ? $usage['completion_tokens'] : 0;
+
+        $meta = is_array($data['meta'] ?? null) ? $data['meta'] : [];
+        $metaId = is_string($meta['id'] ?? null) ? $meta['id'] : '';
+        $metaModel = is_string($meta['model'] ?? null) ? $meta['model'] : $model;
+
         /** @var Collection<int, \Prism\Prism\Structured\Step> $steps */
         $steps = collect([]);
 
@@ -887,8 +907,8 @@ class AiService
             text: json_encode($structured, JSON_THROW_ON_ERROR),
             structured: $structured,
             finishReason: $finishReason,
-            usage: new Usage(0, 0),
-            meta: new Meta(id: '', model: $model),
+            usage: new Usage($promptTokens, $completionTokens),
+            meta: new Meta(id: $metaId, model: $metaModel),
         );
     }
 
@@ -905,7 +925,50 @@ class AiService
         $this->cache->put($key, [
             'structured' => $response->structured,
             'finish_reason' => $response->finishReason->value,
+            'usage' => [
+                'prompt_tokens' => $response->usage->promptTokens,
+                'completion_tokens' => $response->usage->completionTokens,
+            ],
+            'meta' => [
+                'id' => $response->meta->id,
+                'model' => $response->meta->model,
+            ],
         ], $prompt->cacheTtl);
+    }
+
+    /**
+     * Handle fallback to an alternate model after a structured decoding failure.
+     *
+     * @param  Collection<int, Message>  $messages
+     */
+    private function handleStructuredFallback(
+        PromptData $prompt,
+        ObjectSchema $schema,
+        Collection $messages,
+        string $method,
+        ?string $systemPrompt,
+    ): StructuredResponse {
+        $fallbackModelIdentifier = $prompt->fallbackModel ?? throw new \LogicException('handleStructuredFallback called without a fallback model');
+
+        [, $primaryModel] = PromptData::parseModelIdentifier($prompt->model);
+
+        Log::warning('AiWorkflow: Structured decoding failed, switching to fallback model', [
+            'prompt_id' => $prompt->id,
+            'primary_model' => $primaryModel,
+            'fallback_model' => $fallbackModelIdentifier,
+        ]);
+
+        [$fallbackProvider, $fallbackModel] = PromptData::parseModelIdentifier($fallbackModelIdentifier);
+
+        $fallbackStartTime = microtime(true);
+        $response = $this->executeStructuredRequest($messages, $prompt, $schema, $fallbackModelIdentifier, $systemPrompt);
+        $fallbackDurationMs = (microtime(true) - $fallbackStartTime) * 1000;
+
+        $this->logUnexpectedFinishReason($response->finishReason, $prompt, $method);
+        $this->logRequest($prompt, $method, $fallbackProvider, $fallbackModel, $systemPrompt ?? '', $messages->all(), $fallbackDurationMs, structuredResponse: $response, schema: $schema);
+        $this->dispatchCompletedEvent($prompt, $method, $fallbackModel, $response->finishReason, $response->usage, $fallbackDurationMs);
+
+        return $response;
     }
 
     private function dispatchCompletedEvent(

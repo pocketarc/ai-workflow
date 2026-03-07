@@ -5,9 +5,15 @@ declare(strict_types=1);
 namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use Closure;
+use Generator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Event;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Enums\Provider as ProviderEnum;
 use Prism\Prism\Exceptions\PrismException;
@@ -17,11 +23,13 @@ use Prism\Prism\Facades\Tool;
 use Prism\Prism\PrismManager;
 use Prism\Prism\Providers\Provider;
 use Prism\Prism\Streaming\Events\StreamEndEvent;
+use Prism\Prism\Streaming\Events\StreamStartEvent;
 use Prism\Prism\Structured\Request as StructuredRequest;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Testing\PrismFake;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
+use Prism\Prism\Text\Request as TextRequest;
 use Prism\Prism\Text\Response;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
@@ -553,5 +561,86 @@ class AiServiceTest extends TestCase
             $this->makePrompt(), // no fallbackModel
             $this->makeSchema(),
         );
+    }
+
+    // --- flush ---
+
+    public function test_flush_resets_all_state(): void
+    {
+        $service = app(AiService::class);
+
+        $service->setContext(['key' => 'value']);
+        $service->setTags(['tag1']);
+        $service->addMiddleware(new class implements AiWorkflowMiddleware
+        {
+            public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+            {
+                return $next($context);
+            }
+        });
+        $service->resolveToolsUsing(fn (): array => []);
+        // startExecution requires logging; set currentExecution directly.
+        $executionProp = new \ReflectionProperty($service, 'currentExecution');
+        $executionProp->setValue($service, new \AiWorkflow\Models\AiWorkflowExecution);
+
+        $service->flush();
+
+        $this->assertSame([], $service->getContext());
+        $this->assertSame([], $service->getTags());
+        $this->assertSame([], $service->getTools());
+        $this->assertNull($service->endExecution());
+
+        $middlewareProp = new \ReflectionProperty($service, 'middleware');
+        $this->assertSame([], $middlewareProp->getValue($service));
+    }
+
+    // --- streamMessages error handling ---
+
+    public function test_stream_messages_dispatches_failed_event_on_error(): void
+    {
+        Event::fake();
+
+        $fake = new class extends PrismFake
+        {
+            public function __construct()
+            {
+                parent::__construct([]);
+            }
+
+            public function stream(TextRequest $request): Generator
+            {
+                yield new StreamStartEvent(
+                    id: 'fake',
+                    timestamp: time(),
+                    model: 'test-model',
+                    provider: 'fake',
+                );
+
+                throw new RuntimeException('Stream failed mid-iteration');
+            }
+        };
+
+        app()->instance(PrismManager::class, new class($fake) extends PrismManager
+        {
+            public function __construct(private readonly PrismFake $fake) {}
+
+            public function resolve(ProviderEnum|string $name, array $providerConfig = []): Provider
+            {
+                return $this->fake;
+            }
+        });
+
+        $service = app(AiService::class);
+
+        try {
+            foreach ($service->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+                // consuming events
+            }
+            $this->fail('Expected RuntimeException was not thrown');
+        } catch (RuntimeException $e) {
+            $this->assertSame('Stream failed mid-iteration', $e->getMessage());
+        }
+
+        Event::assertDispatched(AiWorkflowRequestFailed::class);
     }
 }

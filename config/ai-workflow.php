@@ -29,6 +29,9 @@ return [
         'structured' => 32_768,
     ],
 
+    // Maximum tool-use steps per text/stream request.
+    'max_steps' => 15,
+
     // Request logging — records every AI call with enough detail to replay.
     'logging' => [
         'enabled' => env('AI_WORKFLOW_LOGGING', false),
