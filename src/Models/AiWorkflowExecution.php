@@ -23,6 +23,9 @@ use Override;
  * @property-read \Illuminate\Database\Eloquent\Collection<int, \AiWorkflow\Models\AiWorkflowRequest> $requests
  * @property-read int|null $requests_count
  *
+ * @method static AiWorkflowExecutionBuilder<static>|AiWorkflowExecution byName(string $name)
+ * @method static AiWorkflowExecutionBuilder<static>|AiWorkflowExecution recent(int $hours = 24)
+ *
  * @mixin \Eloquent
  */
 class AiWorkflowExecution extends Model

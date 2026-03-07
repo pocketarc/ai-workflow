@@ -213,7 +213,6 @@ class ObservabilityTest extends DatabaseTestCase
             'duration_ms' => 100,
             'error' => $error,
             'tags' => $tags,
-            'created_at' => now(),
         ]);
     }
 }

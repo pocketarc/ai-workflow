@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Exceptions;
 
-use RuntimeException;
+use AiWorkflow\Enums\GuardrailDirection;
 
-class GuardrailViolationException extends RuntimeException
+class GuardrailViolationException extends AiWorkflowException
 {
     public function __construct(
         public readonly string $guardrail,
-        public readonly string $direction,
+        public readonly GuardrailDirection $direction,
         string $message = '',
     ) {
-        parent::__construct($message !== '' ? $message : "Guardrail '{$guardrail}' violated ({$direction})");
+        parent::__construct($message !== '' ? $message : "Guardrail '{$guardrail}' violated ({$direction->value})");
     }
 }

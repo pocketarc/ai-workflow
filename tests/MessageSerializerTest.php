@@ -224,6 +224,18 @@ class MessageSerializerTest extends TestCase
         $this->assertSame('You are a helpful assistant.', $deserialized[0]->content);
     }
 
+    public function test_unknown_message_type_throws(): void
+    {
+        $data = [
+            ['type' => 'bogus', 'content' => 'Hello'],
+        ];
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Unknown message type: bogus');
+
+        MessageSerializer::deserialize($data);
+    }
+
     public function test_roundtrip_mixed_conversation(): void
     {
         $messages = [

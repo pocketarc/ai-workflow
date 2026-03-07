@@ -10,10 +10,14 @@ use AiWorkflow\PromptService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Prism\Prism\Contracts\Message;
+use Prism\Prism\Schema\BooleanSchema;
+use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Text\Response;
+use Prism\Prism\ValueObjects\Messages\AssistantMessage;
+use Prism\Prism\ValueObjects\Messages\SystemMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Symfony\Component\Yaml\Yaml;
 
@@ -190,7 +194,13 @@ class PromptTestCommand extends Command
 
         foreach ($rawMessages as $msg) {
             $content = is_string($msg['content'] ?? null) ? $msg['content'] : '';
-            $messages[] = new UserMessage($content);
+            $role = is_string($msg['role'] ?? null) ? $msg['role'] : 'user';
+
+            $messages[] = match ($role) {
+                'assistant' => new AssistantMessage($content),
+                'system' => new SystemMessage($content),
+                default => new UserMessage($content),
+            };
         }
 
         return new Collection($messages);
@@ -254,11 +264,16 @@ class PromptTestCommand extends Command
         /** @var array<string, mixed> $structured */
         $structured = is_array($assertions['structured']) ? $assertions['structured'] : [];
 
+        /** @var list<\Prism\Prism\Contracts\Schema> $properties */
         $properties = [];
         $required = [];
 
-        foreach (array_keys($structured) as $key) {
-            $properties[] = new StringSchema($key, $key);
+        foreach ($structured as $key => $value) {
+            $properties[] = match (true) {
+                is_int($value), is_float($value) => new NumberSchema($key, $key),
+                is_bool($value) => new BooleanSchema($key, $key),
+                default => new StringSchema($key, $key),
+            };
             $required[] = $key;
         }
 

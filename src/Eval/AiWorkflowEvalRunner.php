@@ -49,7 +49,6 @@ class AiWorkflowEvalRunner
                     'details' => $result->details !== [] ? $result->details : null,
                     'response_text' => $response instanceof StructuredResponse ? null : $response->text,
                     'structured_response' => $response instanceof StructuredResponse ? $response->structured : null,
-                    'created_at' => now(),
                 ]);
             }
         }

@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Exceptions;
 
-use RuntimeException;
 use Throwable;
 
-class StructuredValidationException extends RuntimeException
+class StructuredValidationException extends AiWorkflowException
 {
     public function __construct(
         string $message,

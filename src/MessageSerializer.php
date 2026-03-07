@@ -201,7 +201,7 @@ class MessageSerializer
      */
     private static function deserializeMessage(array $data): Message
     {
-        $type = $data['type'] ?? 'unknown';
+        $type = is_string($data['type'] ?? null) ? $data['type'] : 'unknown';
         $content = is_string($data['content'] ?? null) ? $data['content'] : '';
 
         if ($type === 'user') {
@@ -233,7 +233,7 @@ class MessageSerializer
             return new SystemMessage($content);
         }
 
-        return new UserMessage($content);
+        throw new \RuntimeException("Unknown message type: {$type}");
     }
 
     /**

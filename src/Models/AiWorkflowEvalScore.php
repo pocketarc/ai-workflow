@@ -21,6 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null $response_text
  * @property array<string, mixed>|null $structured_response
  * @property \Illuminate\Support\Carbon|null $created_at
+ * @property \Illuminate\Support\Carbon|null $updated_at
  * @property-read \AiWorkflow\Models\AiWorkflowEvalRun $evalRun
  * @property-read \AiWorkflow\Models\AiWorkflowRequest $request
  *
@@ -28,8 +29,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class AiWorkflowEvalScore extends Model
 {
-    public $timestamps = false;
-
     protected $table = 'ai_workflow_eval_scores';
 
     protected $fillable = [
@@ -40,7 +39,6 @@ class AiWorkflowEvalScore extends Model
         'details',
         'response_text',
         'structured_response',
-        'created_at',
     ];
 
     /**
@@ -52,7 +50,6 @@ class AiWorkflowEvalScore extends Model
             'score' => 'float',
             'details' => 'array',
             'structured_response' => 'array',
-            'created_at' => 'datetime',
         ];
     }
 

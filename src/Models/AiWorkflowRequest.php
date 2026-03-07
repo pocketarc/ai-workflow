@@ -33,14 +33,20 @@ use Override;
  * @property array<string, mixed>|null $metadata
  * @property list<string>|null $tags
  * @property \Illuminate\Support\Carbon|null $created_at
+ * @property \Illuminate\Support\Carbon|null $updated_at
  * @property-read \AiWorkflow\Models\AiWorkflowExecution|null $execution
+ *
+ * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byModel(string $model)
+ * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byPrompt(string $promptId)
+ * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest errors()
+ * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest successful()
+ * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest withAnyTag(list<string> $tags)
+ * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest withTag(string $tag)
  *
  * @mixin \Eloquent
  */
 class AiWorkflowRequest extends Model
 {
-    public $timestamps = false;
-
     protected $table = 'ai_workflow_requests';
 
     protected $fillable = [
@@ -61,7 +67,6 @@ class AiWorkflowRequest extends Model
         'error',
         'metadata',
         'tags',
-        'created_at',
     ];
 
     /**
@@ -78,7 +83,6 @@ class AiWorkflowRequest extends Model
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
             'duration_ms' => 'integer',
-            'created_at' => 'datetime',
         ];
     }
 

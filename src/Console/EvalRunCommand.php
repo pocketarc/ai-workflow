@@ -118,7 +118,7 @@ class EvalRunCommand extends Command
 
         $promptId = $this->option('prompt');
         if (is_string($promptId) && $promptId !== '') {
-            $query->where('prompt_id', $promptId);
+            $query->byPrompt($promptId);
         }
 
         $limit = (int) $this->option('limit');

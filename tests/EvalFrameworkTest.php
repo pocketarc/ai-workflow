@@ -255,7 +255,6 @@ class EvalFrameworkTest extends DatabaseTestCase
             'request_id' => $request->id,
             'model' => 'model-a',
             'score' => 0.8,
-            'created_at' => now(),
         ]);
 
         AiWorkflowEvalScore::create([
@@ -263,7 +262,6 @@ class EvalFrameworkTest extends DatabaseTestCase
             'request_id' => $request->id,
             'model' => 'model-b',
             'score' => 0.4,
-            'created_at' => now(),
         ]);
 
         $this->assertEqualsWithDelta(0.6, $evalRun->averageScore(), 0.001);
@@ -366,7 +364,6 @@ class EvalFrameworkTest extends DatabaseTestCase
             'finish_reason' => 'stop',
             'duration_ms' => 100,
             'tags' => $tags,
-            'created_at' => now(),
         ]);
     }
 
@@ -392,7 +389,6 @@ class EvalFrameworkTest extends DatabaseTestCase
                 ],
                 'required' => ['intent'],
             ],
-            'created_at' => now(),
         ]);
     }
 

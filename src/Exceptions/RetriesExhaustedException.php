@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Exceptions;
 
-use Exception;
 use Throwable;
 
-class RetriesExhaustedException extends Exception
+class RetriesExhaustedException extends AiWorkflowException
 {
     public function __construct(
         public readonly int $attempts,

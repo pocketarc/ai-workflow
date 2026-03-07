@@ -20,7 +20,7 @@ class AiWorkflowContext
         public array $messages,
         public PromptData $prompt,
         public string $systemPrompt,
-        public string $method,
+        public readonly string $method,
         public ?ObjectSchema $schema = null,
         public Response|StructuredResponse|null $response = null,
         public array $metadata = [],

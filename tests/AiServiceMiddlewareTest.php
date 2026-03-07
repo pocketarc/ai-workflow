@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Enums\GuardrailDirection;
 use AiWorkflow\Exceptions\GuardrailViolationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
@@ -351,7 +352,7 @@ class AiServiceMiddlewareTest extends TestCase
         {
             protected function validate(AiWorkflowContext $context): void
             {
-                throw new GuardrailViolationException('test-guardrail', 'input', 'Blocked by test');
+                throw new GuardrailViolationException('test-guardrail', GuardrailDirection::Input, 'Blocked by test');
             }
         };
 
@@ -403,7 +404,7 @@ class AiServiceMiddlewareTest extends TestCase
             protected function validate(AiWorkflowContext $context): void
             {
                 if ($context->response instanceof Response && str_contains($context->response->text, 'Bad')) {
-                    throw new GuardrailViolationException('content-filter', 'output', 'Response contains bad content');
+                    throw new GuardrailViolationException('content-filter', GuardrailDirection::Output, 'Response contains bad content');
                 }
             }
         };
@@ -445,16 +446,16 @@ class AiServiceMiddlewareTest extends TestCase
 
     public function test_guardrail_exception_has_properties(): void
     {
-        $exception = new GuardrailViolationException('pii-detection', 'input', 'PII detected');
+        $exception = new GuardrailViolationException('pii-detection', GuardrailDirection::Input, 'PII detected');
 
         $this->assertSame('pii-detection', $exception->guardrail);
-        $this->assertSame('input', $exception->direction);
+        $this->assertSame(GuardrailDirection::Input, $exception->direction);
         $this->assertSame('PII detected', $exception->getMessage());
     }
 
     public function test_guardrail_exception_default_message(): void
     {
-        $exception = new GuardrailViolationException('content-filter', 'output');
+        $exception = new GuardrailViolationException('content-filter', GuardrailDirection::Output);
 
         $this->assertSame("Guardrail 'content-filter' violated (output)", $exception->getMessage());
     }

@@ -394,6 +394,12 @@ class AiService
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $decodingException, $durationMs);
 
             throw $decodingException;
+        } catch (Throwable $exception) {
+            $durationMs = (microtime(true) - $startTime) * 1000;
+            $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, error: $exception, schema: $schema);
+            $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $exception, $durationMs);
+
+            throw $exception;
         }
     }
 
@@ -762,7 +768,6 @@ class AiService
             'schema' => $schema?->toArray(),
             'error' => $error?->getMessage(),
             'tags' => $this->resolveTags($prompt),
-            'created_at' => now(),
         ]);
     }
 
@@ -798,7 +803,6 @@ class AiService
             'output_tokens' => $endEvent->usage?->completionTokens,
             'duration_ms' => (int) $durationMs,
             'tags' => $this->resolveTags($prompt),
-            'created_at' => now(),
         ]);
     }
 
