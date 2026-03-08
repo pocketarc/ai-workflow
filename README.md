@@ -423,7 +423,45 @@ $results = $replayer->replayExecution($execution, useCurrentPrompts: true);
 
 ## Eval Framework
 
-Systematically evaluate AI outputs by replaying recorded requests across models with pluggable judges.
+Evaluate AI outputs by replaying recorded requests from curated datasets across models with pluggable judges.
+
+The workflow: run an AI action, verify the response is correct, add the execution to a named dataset, then eval that dataset against different models to see which ones produce equivalent results.
+
+### Building a Dataset
+
+Datasets are collections of known-good executions. Use execution grouping to track AI calls, then add verified executions to a dataset:
+
+```php
+// In your action, group AI calls under an execution:
+$aiService->startExecution('decide_action #42', ['ticket_id' => 42]);
+$response = $aiService->sendStructuredMessages($messages, $prompt, $schema);
+$execution = $aiService->endExecution();
+// $execution->id is the UUID you'll reference
+```
+
+```bash
+# After verifying the response was correct, add it to a dataset:
+php artisan eval:add decide-actions abc-123-uuid
+
+# List all datasets
+php artisan eval:list
+
+# Show executions in a dataset
+php artisan eval:show decide-actions
+
+# Remove an execution from a dataset
+php artisan eval:remove decide-actions abc-123-uuid
+```
+
+### Running Evals
+
+```bash
+php artisan eval:run decide-actions \
+    --models=openrouter:google/gemini-3-pro,openrouter:openai/gpt-5.2 \
+    --judge=App\\Eval\\MyJudge
+```
+
+This replays every request in the dataset against each model, judges the results, and displays a per-model score table.
 
 ### Writing a Judge
 
@@ -447,19 +485,20 @@ class MyJudge implements AiWorkflowEvalJudge
 }
 ```
 
-The package includes `AiJudge` as an example — it uses an AI model to semantically compare original and new responses (e.g. `{"payer": "John"}` vs `{"payer": "john"}` scores high).
+The package includes `AiJudge` — an AI-powered judge that semantically compares original and new responses (e.g. `{"payer": "John"}` vs `{"payer": "john"}` scores high). For domain-specific evaluation, implement your own judge with custom scoring logic.
 
 ### Running Evals in Code
 
 ```php
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
-use AiWorkflow\Models\AiWorkflowRequest;
+use AiWorkflow\Models\AiWorkflowEvalDataset;
 
 $runner = app(AiWorkflowEvalRunner::class);
+$dataset = AiWorkflowEvalDataset::query()->where('name', 'decide-actions')->firstOrFail();
 
 $evalRun = $runner->run(
-    name: 'Classification eval',
-    requests: AiWorkflowRequest::query()->withTag('classification')->limit(50)->get()->all(),
+    name: 'Decision eval',
+    requests: $dataset->requests(),
     models: ['openrouter:anthropic/claude-4', 'openrouter:google/gemini-3-pro'],
     judge: app(MyJudge::class),
 );
@@ -467,19 +506,6 @@ $evalRun = $runner->run(
 $evalRun->averageScore();                                    // overall
 $evalRun->averageScoreForModel('openrouter:anthropic/claude-4'); // per model
 ```
-
-### Running Evals via CLI
-
-```bash
-php artisan ai-workflow:eval \
-    --judge=App\\Eval\\MyJudge \
-    --tag=classification \
-    --models=openrouter:anthropic/claude-4,openrouter:google/gemini-3-pro \
-    --name="Classification eval" \
-    --limit=100
-```
-
-The `--judge` option accepts a FQCN resolved from the Laravel container.
 
 ## Prompt Testing
 

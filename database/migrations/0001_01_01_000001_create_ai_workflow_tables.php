@@ -84,10 +84,37 @@ return new class extends Migration
             $table->index(['eval_run_id', 'model']);
             $table->index('request_id');
         });
+
+        Schema::create('ai_workflow_eval_datasets', function (Blueprint $table): void {
+            $table->uuid('id')->primary();
+            $table->string('name')->unique();
+            $table->timestamps();
+        });
+
+        Schema::create('ai_workflow_eval_dataset_entries', function (Blueprint $table): void {
+            $table->id();
+            $table->uuid('dataset_id');
+            $table->uuid('execution_id');
+            $table->timestamps();
+
+            $table->foreign('dataset_id')
+                ->references('id')
+                ->on('ai_workflow_eval_datasets')
+                ->cascadeOnDelete();
+
+            $table->foreign('execution_id')
+                ->references('id')
+                ->on('ai_workflow_executions')
+                ->cascadeOnDelete();
+
+            $table->unique(['dataset_id', 'execution_id']);
+        });
     }
 
     public function down(): void
     {
+        Schema::dropIfExists('ai_workflow_eval_dataset_entries');
+        Schema::dropIfExists('ai_workflow_eval_datasets');
         Schema::dropIfExists('ai_workflow_eval_scores');
         Schema::dropIfExists('ai_workflow_eval_runs');
         Schema::dropIfExists('ai_workflow_requests');

@@ -319,64 +319,6 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertEqualsWithDelta(0.4, $evalRun->averageScoreForModel('model-b'), 0.001);
     }
 
-    // --- EvalRunCommand ---
-
-    public function test_eval_command_requires_judge(): void
-    {
-        $this->artisan('ai-workflow:eval', ['--models' => 'openrouter:test-model'])
-            ->expectsOutput('A judge class is required. Use --judge=App\\Eval\\MyJudge')
-            ->assertExitCode(1);
-    }
-
-    public function test_eval_command_requires_models(): void
-    {
-        $this->artisan('ai-workflow:eval', ['--judge' => FixedScoreJudge::class])
-            ->expectsOutput('At least one model is required. Use --models=provider:model')
-            ->assertExitCode(1);
-    }
-
-    public function test_eval_command_validates_judge_class_exists(): void
-    {
-        $this->artisan('ai-workflow:eval', [
-            '--models' => 'openrouter:test-model',
-            '--judge' => 'App\\NonExistent\\Judge',
-        ])
-            ->expectsOutput("Judge class 'App\\NonExistent\\Judge' not found.")
-            ->assertExitCode(1);
-    }
-
-    public function test_eval_command_warns_on_no_requests(): void
-    {
-        $this->artisan('ai-workflow:eval', [
-            '--models' => 'openrouter:test-model',
-            '--judge' => FixedScoreJudge::class,
-        ])
-            ->expectsOutput('No requests found matching the criteria.')
-            ->assertExitCode(0);
-    }
-
-    public function test_eval_command_runs_with_tag_filter(): void
-    {
-        Prism::fake([
-            TextResponseFake::make()
-                ->withText('Hello')
-                ->withFinishReason(FinishReason::Stop),
-        ]);
-
-        $this->createTextRequest(responseText: 'Hello', tags: ['classification']);
-        $this->createTextRequest(responseText: 'Other', tags: ['unrelated']);
-
-        $this->artisan('ai-workflow:eval', [
-            '--models' => 'openrouter:test-model',
-            '--tag' => 'classification',
-            '--judge' => FixedScoreJudge::class,
-            '--name' => 'Test eval run',
-        ])->assertExitCode(0);
-
-        $this->assertDatabaseCount('ai_workflow_eval_runs', 1);
-        $this->assertDatabaseCount('ai_workflow_eval_scores', 1);
-    }
-
     // --- Helpers ---
 
     /**
@@ -469,16 +411,5 @@ class EvalFrameworkTest extends DatabaseTestCase
             usage: new Usage(10, 20),
             meta: new Meta(id: 'test', model: 'test-model'),
         );
-    }
-}
-
-/**
- * Simple judge fixture for command tests — resolved from container via FQCN.
- */
-class FixedScoreJudge implements AiWorkflowEvalJudge
-{
-    public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
-    {
-        return new AiWorkflowEvalResult(0.5);
     }
 }

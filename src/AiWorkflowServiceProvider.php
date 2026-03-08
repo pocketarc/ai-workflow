@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace AiWorkflow;
 
+use AiWorkflow\Console\EvalAddCommand;
+use AiWorkflow\Console\EvalListCommand;
+use AiWorkflow\Console\EvalRemoveCommand;
 use AiWorkflow\Console\EvalRunCommand;
+use AiWorkflow\Console\EvalShowCommand;
 use AiWorkflow\Console\PromptTestCommand;
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
@@ -38,7 +42,11 @@ class AiWorkflowServiceProvider extends ServiceProvider
             ], 'ai-workflow-migrations');
 
             $this->commands([
+                EvalAddCommand::class,
+                EvalListCommand::class,
+                EvalRemoveCommand::class,
                 EvalRunCommand::class,
+                EvalShowCommand::class,
                 PromptTestCommand::class,
             ]);
         }
