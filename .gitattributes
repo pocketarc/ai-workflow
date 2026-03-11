@@ -1,0 +1,13 @@
+/.claude            export-ignore
+/.idea              export-ignore
+/.phpunit.cache     export-ignore
+/docker             export-ignore
+/tests              export-ignore
+_ide_helper.php     export-ignore
+captainhook.json    export-ignore
+CLAUDE.md           export-ignore
+docker-compose.yml  export-ignore
+phpstan.neon        export-ignore
+phpunit.xml         export-ignore
+pint.json           export-ignore
+testbench.yaml      export-ignore

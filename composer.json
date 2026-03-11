@@ -4,6 +4,12 @@
     "description": "Production-ready AI workflows for Laravel — resilient calls with retries, fallback models, and prompt management.",
     "keywords": ["laravel", "ai", "prism", "retry", "prompts"],
     "license": "MIT",
+    "authors": [
+        {
+            "name": "Bruno Moreira",
+            "email": "bruno.moreira@solmyr.com"
+        }
+    ],
     "type": "library",
     "require": {
         "php": "^8.3",
@@ -49,5 +55,4 @@
             "phpstan/extension-installer": true
         }
     },
-    "prefer-stable": true
 }
