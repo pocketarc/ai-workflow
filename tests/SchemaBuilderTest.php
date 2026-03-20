@@ -8,6 +8,7 @@ use AiWorkflow\AiService;
 use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\PromptData;
 use AiWorkflow\SchemaBuilder;
+use AiWorkflow\StructuredDataResult;
 use AiWorkflow\Tests\Fixtures\Data\AddressData;
 use AiWorkflow\Tests\Fixtures\Data\PersonData;
 use AiWorkflow\Tests\Fixtures\Data\SentimentData;
@@ -22,6 +23,7 @@ use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Prism\Prism\ValueObjects\Usage;
 
 class SchemaBuilderTest extends TestCase
 {
@@ -184,9 +186,10 @@ class SchemaBuilderTest extends TestCase
             SentimentData::class,
         );
 
-        $this->assertInstanceOf(SentimentData::class, $result);
-        $this->assertSame('positive', $result->sentiment);
-        $this->assertSame(0.95, $result->confidence);
+        $this->assertInstanceOf(StructuredDataResult::class, $result);
+        $this->assertInstanceOf(SentimentData::class, $result->data);
+        $this->assertSame('positive', $result->data->sentiment);
+        $this->assertSame(0.95, $result->data->confidence);
     }
 
     public function test_send_structured_data_retries_on_validation_failure(): void
@@ -209,8 +212,9 @@ class SchemaBuilderTest extends TestCase
             SentimentData::class,
         );
 
-        $this->assertInstanceOf(SentimentData::class, $result);
-        $this->assertSame('negative', $result->sentiment);
+        $this->assertInstanceOf(StructuredDataResult::class, $result);
+        $this->assertInstanceOf(SentimentData::class, $result->data);
+        $this->assertSame('negative', $result->data->sentiment);
     }
 
     public function test_send_structured_data_throws_after_max_attempts(): void
@@ -262,5 +266,31 @@ class SchemaBuilderTest extends TestCase
             $this->assertSame(3, $e->attempts);
             $this->assertNotNull($e->getPrevious());
         }
+    }
+
+    public function test_send_structured_data_result_includes_response_and_usage(): void
+    {
+        $usage = new Usage(100, 50, thoughtTokens: 30);
+
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'positive', 'confidence' => 0.95])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage($usage),
+        ]);
+
+        $service = app(AiService::class);
+        $result = $service->sendStructuredData(
+            collect([new UserMessage('Analyze this text')]),
+            new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze sentiment.'),
+            SentimentData::class,
+        );
+
+        $this->assertInstanceOf(StructuredDataResult::class, $result);
+        $this->assertSame(100, $result->usage->promptTokens);
+        $this->assertSame(50, $result->usage->completionTokens);
+        $this->assertSame(30, $result->usage->thoughtTokens);
+        $this->assertSame($result->response->usage, $result->usage);
+        $this->assertSame(FinishReason::Stop, $result->response->finishReason);
     }
 }

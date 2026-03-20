@@ -22,6 +22,8 @@ use Illuminate\Support\Facades\Log;
 use Prism\Prism\Contracts\Message;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Exceptions\PrismException;
+use Prism\Prism\Exceptions\PrismProviderOverloadedException;
+use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ObjectSchema;
@@ -204,21 +206,28 @@ class AiService
         $startTime = microtime(true);
 
         try {
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($provider, $model, &$retryAttempts, $steps, $maxTokens, $clientOptions): AiWorkflowContext {
-                $ctx->response = Prism::text()
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, &$retryAttempts, $steps, $maxTokens, $clientOptions): AiWorkflowContext {
+                $builder = Prism::text()
                     ->using($provider, $model)
                     ->withSystemPrompt($ctx->systemPrompt)
                     ->withMessages($ctx->messages)
                     ->withTools($this->getTools())
                     ->withMaxSteps($steps)
-                    ->withMaxTokens($maxTokens['text'])
+                    ->withMaxTokens($prompt->maxTokens ?? $maxTokens['text'])
                     ->withClientOptions($clientOptions)
                     ->withClientRetry(
                         times: $this->retryTimes(),
                         sleepMilliseconds: $this->retrySleep($retryAttempts),
                         when: $this->retryWhen(),
-                    )
-                    ->asText();
+                    );
+
+                if ($prompt->reasoning !== null) {
+                    $builder = $builder->withProviderOptions([
+                        'reasoning' => ['effort' => $prompt->reasoning],
+                    ]);
+                }
+
+                $ctx->response = $builder->asText();
 
                 return $ctx;
             });
@@ -273,16 +282,18 @@ class AiService
             schema: $schema,
         );
 
+        $retryAttempts = 0;
         $startTime = microtime(true);
 
         try {
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier): AiWorkflowContext {
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, &$retryAttempts): AiWorkflowContext {
                 $ctx->response = $this->executeStructuredRequest(
                     new Collection($ctx->messages),
                     $ctx->prompt,
                     $schema,
                     $effectiveModelIdentifier,
                     $ctx->systemPrompt,
+                    $retryAttempts,
                 );
 
                 return $ctx;
@@ -313,6 +324,9 @@ class AiService
             $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessages', $model, $exception, $durationMs);
 
+            if ($retryAttempts > 0) {
+                throw new RetriesExhaustedException($retryAttempts, $exception);
+            }
             throw $exception;
         }
     }
@@ -352,10 +366,11 @@ class AiService
         $newMessages = new Collection($messageList);
 
         [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
+        $retryAttempts = 0;
         $startTime = microtime(true);
 
         try {
-            $response = $this->executeStructuredRequest($newMessages, $prompt, $schema, $prompt->model);
+            $response = $this->executeStructuredRequest($newMessages, $prompt, $schema, $prompt->model, null, $retryAttempts);
             $durationMs = (microtime(true) - $startTime) * 1000;
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessagesWithTools');
@@ -378,12 +393,15 @@ class AiService
             $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $exception, $durationMs);
 
+            if ($retryAttempts > 0) {
+                throw new RetriesExhaustedException($retryAttempts, $exception);
+            }
             throw $exception;
         }
     }
 
     /**
-     * Send structured messages and return a validated Laravel Data instance.
+     * Send structured messages and return a validated Laravel Data instance with the full response.
      *
      * Generates the schema from the Data class, sends the request, validates
      * the response, and retries with feedback on validation failure.
@@ -392,14 +410,13 @@ class AiService
      *
      * @param  Collection<int, Message>  $messages
      * @param  class-string<T>  $dataClass
-     * @return T
      */
     public function sendStructuredData(
         Collection $messages,
         PromptData $prompt,
         string $dataClass,
         int $maxAttempts = 3,
-    ): \Spatie\LaravelData\Data {
+    ): StructuredDataResult {
         if (! class_exists(\Spatie\LaravelData\Data::class)) {
             throw new \RuntimeException('spatie/laravel-data is required to use sendStructuredData(). Install it with: composer require spatie/laravel-data');
         }
@@ -414,7 +431,9 @@ class AiService
 
             try {
                 /** @var T */
-                return $dataClass::from($response->structured);
+                $data = $dataClass::from($response->structured);
+
+                return new StructuredDataResult($data, $response, $response->usage);
             } catch (\Throwable $e) {
                 if ($attempt === $maxAttempts) {
                     throw new StructuredValidationException($e->getMessage(), $attempt, $e);
@@ -456,15 +475,22 @@ class AiService
 
         $startTime = microtime(true);
 
-        $stream = Prism::text()
+        $builder = Prism::text()
             ->using($provider, $model)
             ->withSystemPrompt($systemPrompt)
             ->withMessages($messages->all())
             ->withTools($this->getTools())
             ->withMaxSteps($steps)
-            ->withMaxTokens($maxTokens['text'])
-            ->withClientOptions($clientOptions)
-            ->asStream();
+            ->withMaxTokens($prompt->maxTokens ?? $maxTokens['text'])
+            ->withClientOptions($clientOptions);
+
+        if ($prompt->reasoning !== null) {
+            $builder = $builder->withProviderOptions([
+                'reasoning' => ['effort' => $prompt->reasoning],
+            ]);
+        }
+
+        $stream = $builder->asStream();
 
         try {
             foreach ($stream as $event) {
@@ -502,7 +528,9 @@ class AiService
         ObjectSchema $schema,
         string $modelIdentifier,
         ?string $systemPrompt = null,
+        ?int &$retryAttempts = null,
     ): StructuredResponse {
+        $retryAttempts = 0;
         [$provider, $model] = PromptData::parseModelIdentifier($modelIdentifier);
 
         $maxTokens = $this->maxTokens();
@@ -512,11 +540,11 @@ class AiService
             ->using($provider, $model)
             ->withSchema($schema)
             ->withMessages($messages->all())
-            ->withMaxTokens($maxTokens['structured'])
+            ->withMaxTokens($prompt->maxTokens ?? $maxTokens['structured'])
             ->withClientOptions($clientOptions)
             ->withClientRetry(
                 times: $this->retryTimes(),
-                sleepMilliseconds: $this->retrySleep(),
+                sleepMilliseconds: $this->retrySleep($retryAttempts),
                 when: $this->retryWhen(),
             );
 
@@ -524,7 +552,15 @@ class AiService
             $builder = $builder->withSystemPrompt($systemPrompt);
         }
 
-        return $builder->asStructured();
+        if ($prompt->reasoning !== null) {
+            $builder = $builder->withProviderOptions([
+                'reasoning' => ['effort' => $prompt->reasoning],
+            ]);
+        }
+
+        $response = $builder->asStructured();
+
+        return $response;
     }
 
     /**
@@ -645,6 +681,12 @@ class AiService
                 } elseif ($status >= 500 && $status < 600) {
                     $delay = $attempt * $retryConfig['server_error_multiplier_ms'];
                 }
+            } elseif ($exception instanceof PrismRateLimitedException) {
+                $delay = $exception->retryAfter !== null
+                    ? $exception->retryAfter * 1000
+                    : $retryConfig['rate_limit_delay_ms'];
+            } elseif ($exception instanceof PrismProviderOverloadedException || $exception instanceof PrismException) {
+                $delay = $attempt * $retryConfig['server_error_multiplier_ms'];
             }
 
             if ($retryConfig['jitter']) {
@@ -682,6 +724,22 @@ class AiService
                 $status = $exception->response->status();
 
                 return $status === 429 || ($status >= 500 && $status < 600);
+            }
+
+            // Prism wraps some provider errors (rate limits, overloaded, unknown
+            // finish reasons, 500s returned as 200+error body) into its own
+            // exception types that bypass HTTP-level retry. Retry these too.
+            if ($exception instanceof PrismRateLimitedException) {
+                return true;
+            }
+            if ($exception instanceof PrismProviderOverloadedException) {
+                return true;
+            }
+            if ($exception instanceof PrismStructuredDecodingException) {
+                return false;
+            }
+            if ($exception instanceof PrismException) {
+                return true;
             }
 
             return false;
@@ -760,6 +818,7 @@ class AiService
             'finish_reason' => $textResponse?->finishReason->value ?? $structuredResponse?->finishReason->value,
             'input_tokens' => $textResponse?->usage->promptTokens ?? $structuredResponse?->usage->promptTokens,
             'output_tokens' => $textResponse?->usage->completionTokens ?? $structuredResponse?->usage->completionTokens,
+            'thought_tokens' => $textResponse?->usage->thoughtTokens ?? $structuredResponse?->usage->thoughtTokens,
             'duration_ms' => (int) $durationMs,
             'schema' => $schema?->toArray(),
             'error' => $error?->getMessage(),
@@ -798,6 +857,7 @@ class AiService
             'finish_reason' => $endEvent->finishReason->value,
             'input_tokens' => $endEvent->usage?->promptTokens,
             'output_tokens' => $endEvent->usage?->completionTokens,
+            'thought_tokens' => $endEvent->usage?->thoughtTokens,
             'duration_ms' => (int) $durationMs,
             'tags' => $this->resolveTags($prompt),
             'template_variables' => $prompt->variables !== [] ? $prompt->variables : null,
@@ -825,6 +885,7 @@ class AiService
         $usage = is_array($data['usage'] ?? null) ? $data['usage'] : [];
         $promptTokens = is_int($usage['prompt_tokens'] ?? null) ? $usage['prompt_tokens'] : 0;
         $completionTokens = is_int($usage['completion_tokens'] ?? null) ? $usage['completion_tokens'] : 0;
+        $thoughtTokens = is_int($usage['thought_tokens'] ?? null) ? $usage['thought_tokens'] : null;
 
         $meta = is_array($data['meta'] ?? null) ? $data['meta'] : [];
         $metaId = is_string($meta['id'] ?? null) ? $meta['id'] : '';
@@ -842,7 +903,7 @@ class AiService
             finishReason: $finishReason,
             toolCalls: [],
             toolResults: [],
-            usage: new Usage($promptTokens, $completionTokens),
+            usage: new Usage($promptTokens, $completionTokens, thoughtTokens: $thoughtTokens),
             meta: new Meta(id: $metaId, model: $metaModel),
             messages: $responseMessages,
         );
@@ -864,6 +925,7 @@ class AiService
             'usage' => [
                 'prompt_tokens' => $response->usage->promptTokens,
                 'completion_tokens' => $response->usage->completionTokens,
+                'thought_tokens' => $response->usage->thoughtTokens,
             ],
             'meta' => [
                 'id' => $response->meta->id,
@@ -894,6 +956,7 @@ class AiService
         $usage = is_array($data['usage'] ?? null) ? $data['usage'] : [];
         $promptTokens = is_int($usage['prompt_tokens'] ?? null) ? $usage['prompt_tokens'] : 0;
         $completionTokens = is_int($usage['completion_tokens'] ?? null) ? $usage['completion_tokens'] : 0;
+        $thoughtTokens = is_int($usage['thought_tokens'] ?? null) ? $usage['thought_tokens'] : null;
 
         $meta = is_array($data['meta'] ?? null) ? $data['meta'] : [];
         $metaId = is_string($meta['id'] ?? null) ? $meta['id'] : '';
@@ -907,7 +970,7 @@ class AiService
             text: json_encode($structured, JSON_THROW_ON_ERROR),
             structured: $structured,
             finishReason: $finishReason,
-            usage: new Usage($promptTokens, $completionTokens),
+            usage: new Usage($promptTokens, $completionTokens, thoughtTokens: $thoughtTokens),
             meta: new Meta(id: $metaId, model: $metaModel),
         );
     }
@@ -928,6 +991,7 @@ class AiService
             'usage' => [
                 'prompt_tokens' => $response->usage->promptTokens,
                 'completion_tokens' => $response->usage->completionTokens,
+                'thought_tokens' => $response->usage->thoughtTokens,
             ],
             'meta' => [
                 'id' => $response->meta->id,

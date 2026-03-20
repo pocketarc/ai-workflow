@@ -23,6 +23,7 @@ use stdClass;
  * @property-read stdClass $request_stats
  * @property-read int $total_input_tokens
  * @property-read int $total_output_tokens
+ * @property-read int $total_thought_tokens
  * @property-read int $total_tokens
  * @property-read int $total_duration_ms
  * @property-read int $request_count
@@ -82,8 +83,8 @@ class AiWorkflowExecution extends Model
     {
         return Attribute::make(get: fn (): stdClass => $this->requests()
             ->toBase()
-            ->selectRaw('COALESCE(SUM(input_tokens), 0) as total_input, COALESCE(SUM(output_tokens), 0) as total_output, COALESCE(SUM(duration_ms), 0) as total_duration, COUNT(*) as total_count')
-            ->first() ?? (object) ['total_input' => 0, 'total_output' => 0, 'total_duration' => 0, 'total_count' => 0]
+            ->selectRaw('COALESCE(SUM(input_tokens), 0) as total_input, COALESCE(SUM(output_tokens), 0) as total_output, COALESCE(SUM(thought_tokens), 0) as total_thought, COALESCE(SUM(duration_ms), 0) as total_duration, COUNT(*) as total_count')
+            ->first() ?? (object) ['total_input' => 0, 'total_output' => 0, 'total_thought' => 0, 'total_duration' => 0, 'total_count' => 0]
         );
     }
 
@@ -106,6 +107,18 @@ class AiWorkflowExecution extends Model
     {
         return Attribute::make(get: function (): int {
             $value = $this->request_stats->total_output;
+
+            return is_numeric($value) ? (int) $value : 0;
+        });
+    }
+
+    /**
+     * @return Attribute<int, never>
+     */
+    protected function totalThoughtTokens(): Attribute
+    {
+        return Attribute::make(get: function (): int {
+            $value = $this->request_stats->total_thought;
 
             return is_numeric($value) ? (int) $value : 0;
         });

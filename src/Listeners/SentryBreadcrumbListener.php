@@ -25,6 +25,7 @@ class SentryBreadcrumbListener
                 'finish_reason' => $event->finishReason->value,
                 'input_tokens' => $event->usage->promptTokens,
                 'output_tokens' => $event->usage->completionTokens,
+                'thought_tokens' => $event->usage->thoughtTokens,
                 'duration_ms' => round($event->durationMs, 2),
                 'execution_id' => $event->executionId,
             ],

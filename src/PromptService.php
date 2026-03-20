@@ -36,6 +36,8 @@ class PromptService
         $fallbackModel = $document->matter('fallback_model');
         $tags = $document->matter('tags');
         $cacheTtl = $document->matter('cache_ttl');
+        $reasoning = $document->matter('reasoning');
+        $maxTokens = $document->matter('max_tokens');
 
         if (! is_string($model)) {
             throw new RuntimeException(
@@ -60,6 +62,8 @@ class PromptService
             tags: $parsedTags,
             cacheTtl: is_int($cacheTtl) ? $cacheTtl : null,
             variables: $variables,
+            reasoning: is_string($reasoning) ? $reasoning : null,
+            maxTokens: is_int($maxTokens) ? $maxTokens : null,
         );
     }
 

@@ -17,6 +17,8 @@ use Illuminate\Support\Facades\Event;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Enums\Provider as ProviderEnum;
 use Prism\Prism\Exceptions\PrismException;
+use Prism\Prism\Exceptions\PrismProviderOverloadedException;
+use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Facades\Tool;
@@ -642,5 +644,94 @@ class AiServiceTest extends TestCase
         }
 
         Event::assertDispatched(AiWorkflowRequestFailed::class);
+    }
+
+    // --- Retry on Prism Exceptions ---
+
+    public function test_retry_when_returns_true_for_prism_rate_limited(): void
+    {
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retryWhen');
+        $closure = $method->invoke($service);
+
+        $this->assertTrue($closure(PrismRateLimitedException::make()));
+    }
+
+    public function test_retry_when_returns_true_for_prism_provider_overloaded(): void
+    {
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retryWhen');
+        $closure = $method->invoke($service);
+
+        $this->assertTrue($closure(PrismProviderOverloadedException::make('openrouter')));
+    }
+
+    public function test_retry_when_returns_true_for_prism_exception(): void
+    {
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retryWhen');
+        $closure = $method->invoke($service);
+
+        $this->assertTrue($closure(new PrismException('OpenRouter: unknown finish reason')));
+    }
+
+    public function test_retry_when_returns_false_for_prism_structured_decoding(): void
+    {
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retryWhen');
+        $closure = $method->invoke($service);
+
+        $this->assertFalse($closure(PrismStructuredDecodingException::make('invalid json')));
+    }
+
+    public function test_retry_sleep_uses_rate_limit_delay_for_prism_rate_limited(): void
+    {
+        config()->set('ai-workflow.retry.jitter', false);
+        config()->set('ai-workflow.retry.rate_limit_delay_ms', 30_000);
+
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retrySleep');
+        $closure = $method->invoke($service);
+
+        $delay = $closure(1, PrismRateLimitedException::make());
+        $this->assertSame(30_000, $delay);
+    }
+
+    public function test_retry_sleep_uses_retry_after_from_prism_rate_limited(): void
+    {
+        config()->set('ai-workflow.retry.jitter', false);
+
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retrySleep');
+        $closure = $method->invoke($service);
+
+        $delay = $closure(1, PrismRateLimitedException::make(retryAfter: 10));
+        $this->assertSame(10_000, $delay);
+    }
+
+    public function test_retry_sleep_uses_server_error_delay_for_prism_exception(): void
+    {
+        config()->set('ai-workflow.retry.jitter', false);
+        config()->set('ai-workflow.retry.server_error_multiplier_ms', 2_000);
+
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retrySleep');
+        $closure = $method->invoke($service);
+
+        $delay = $closure(2, new PrismException('OpenRouter Error [500]'));
+        $this->assertSame(4_000, $delay);
+    }
+
+    public function test_retry_sleep_uses_server_error_delay_for_provider_overloaded(): void
+    {
+        config()->set('ai-workflow.retry.jitter', false);
+        config()->set('ai-workflow.retry.server_error_multiplier_ms', 2_000);
+
+        $service = app(AiService::class);
+        $method = new \ReflectionMethod($service, 'retrySleep');
+        $closure = $method->invoke($service);
+
+        $delay = $closure(3, PrismProviderOverloadedException::make('openrouter'));
+        $this->assertSame(6_000, $delay);
     }
 }

@@ -14,6 +14,7 @@ use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Prism\Prism\ValueObjects\Usage;
 
 class AiServiceLoggingTest extends DatabaseTestCase
 {
@@ -358,6 +359,66 @@ class AiServiceLoggingTest extends DatabaseTestCase
         // Second call should be a cache hit — no new log record.
         $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
         $this->assertDatabaseCount('ai_workflow_requests', 1);
+    }
+
+    public function test_thought_tokens_are_logged(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Hello')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50, thoughtTokens: 25)),
+        ]);
+
+        $service = app(AiService::class);
+        $service->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame(100, $request->input_tokens);
+        $this->assertSame(50, $request->output_tokens);
+        $this->assertSame(25, $request->thought_tokens);
+    }
+
+    public function test_thought_tokens_null_when_not_present(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Hello')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50)),
+        ]);
+
+        $service = app(AiService::class);
+        $service->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertNull($request->thought_tokens);
+    }
+
+    public function test_execution_thought_token_tracking(): void
+    {
+        $usage = new Usage(100, 50, thoughtTokens: 25);
+
+        Prism::fake([
+            TextResponseFake::make()->withText('First')->withFinishReason(FinishReason::Stop)->withUsage($usage),
+            TextResponseFake::make()->withText('Second')->withFinishReason(FinishReason::Stop)->withUsage($usage),
+            TextResponseFake::make()->withText('Third')->withFinishReason(FinishReason::Stop)->withUsage($usage),
+        ]);
+
+        $service = app(AiService::class);
+        $service->startExecution('thought_token_test');
+
+        $service->sendMessages(collect([new UserMessage('First')]), $this->makePrompt());
+        $service->sendMessages(collect([new UserMessage('Second')]), $this->makePrompt());
+        $service->sendMessages(collect([new UserMessage('Third')]), $this->makePrompt());
+
+        $execution = $service->endExecution();
+        $this->assertNotNull($execution);
+
+        $this->assertSame(75, $execution->total_thought_tokens);
+        $this->assertSame(450, $execution->total_tokens);
     }
 
     public function test_messages_are_serialized_correctly(): void

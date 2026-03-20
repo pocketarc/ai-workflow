@@ -27,6 +27,7 @@ use Override;
  * @property string|null $finish_reason
  * @property int|null $input_tokens
  * @property int|null $output_tokens
+ * @property int|null $thought_tokens
  * @property int $duration_ms
  * @property array<string, mixed>|null $schema
  * @property string|null $error
@@ -63,6 +64,7 @@ class AiWorkflowRequest extends Model
         'finish_reason',
         'input_tokens',
         'output_tokens',
+        'thought_tokens',
         'duration_ms',
         'schema',
         'error',
@@ -85,6 +87,7 @@ class AiWorkflowRequest extends Model
             'template_variables' => 'array',
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
+            'thought_tokens' => 'integer',
             'duration_ms' => 'integer',
         ];
     }
