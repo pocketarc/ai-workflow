@@ -163,4 +163,83 @@ class PromptServiceTest extends TestCase
 
         $this->assertNull($prompt->reasoning);
     }
+
+    public function test_resolve_reasoning_options_for_openrouter_effort(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'openrouter:test/model', prompt: 'test', reasoning: 'high');
+
+        $this->assertSame(['reasoning' => ['effort' => 'high']], $prompt->resolveReasoningOptions('openrouter', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_openrouter_max_tokens(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'openrouter:test/model', prompt: 'test', reasoning: 8000);
+
+        $this->assertSame(['reasoning' => ['max_tokens' => 8000]], $prompt->resolveReasoningOptions('openrouter', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_anthropic_max_tokens(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'anthropic:claude-4', prompt: 'test', reasoning: 8000);
+
+        $this->assertSame(['thinking' => ['enabled' => true, 'budgetTokens' => 8000]], $prompt->resolveReasoningOptions('anthropic', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_anthropic_effort(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'anthropic:claude-4', prompt: 'test', reasoning: 'high');
+
+        // high = 0.8 * 16384 = 13107
+        $this->assertSame(['thinking' => ['enabled' => true, 'budgetTokens' => 13107]], $prompt->resolveReasoningOptions('anthropic', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_anthropic_effort_clamps_minimum(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'anthropic:claude-4', prompt: 'test', reasoning: 'minimal');
+
+        // minimal = 0.1 * 2000 = 200, clamped to 1024
+        $this->assertSame(['thinking' => ['enabled' => true, 'budgetTokens' => 1024]], $prompt->resolveReasoningOptions('anthropic', 2000));
+    }
+
+    public function test_resolve_reasoning_options_for_anthropic_none_returns_empty(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'anthropic:claude-4', prompt: 'test', reasoning: 'none');
+
+        $this->assertSame([], $prompt->resolveReasoningOptions('anthropic', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_gemini_effort(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'gemini:gemini-3-pro', prompt: 'test', reasoning: 'high');
+
+        $this->assertSame(['thinkingLevel' => 'high'], $prompt->resolveReasoningOptions('gemini', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_gemini_xhigh_maps_to_high(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'gemini:gemini-3-pro', prompt: 'test', reasoning: 'xhigh');
+
+        $this->assertSame(['thinkingLevel' => 'high'], $prompt->resolveReasoningOptions('gemini', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_gemini_none_disables_thinking(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'gemini:gemini-3-pro', prompt: 'test', reasoning: 'none');
+
+        $this->assertSame(['thinkingBudget' => 0], $prompt->resolveReasoningOptions('gemini', 16384));
+    }
+
+    public function test_resolve_reasoning_options_for_gemini_max_tokens(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'gemini:gemini-3-pro', prompt: 'test', reasoning: 8000);
+
+        $this->assertSame(['thinkingBudget' => 8000], $prompt->resolveReasoningOptions('gemini', 16384));
+    }
+
+    public function test_resolve_reasoning_options_returns_empty_when_null(): void
+    {
+        $prompt = new PromptData(id: 'test', model: 'openrouter:test/model', prompt: 'test');
+
+        $this->assertSame([], $prompt->resolveReasoningOptions('openrouter', 16384));
+    }
 }

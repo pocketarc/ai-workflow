@@ -208,14 +208,16 @@ class AiService
         $startTime = microtime(true);
 
         try {
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, &$retryAttempts, $steps, $maxTokens, $clientOptions): AiWorkflowContext {
+            $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['text'];
+
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, &$retryAttempts, $steps, $resolvedMaxTokens, $clientOptions): AiWorkflowContext {
                 $builder = Prism::text()
                     ->using($provider, $model)
                     ->withSystemPrompt($ctx->systemPrompt)
                     ->withMessages($ctx->messages)
                     ->withTools($this->getTools())
                     ->withMaxSteps($steps)
-                    ->withMaxTokens($prompt->maxTokens ?? $maxTokens['text'])
+                    ->withMaxTokens($resolvedMaxTokens)
                     ->withClientOptions($clientOptions)
                     ->withClientRetry(
                         times: $this->retryTimes(),
@@ -223,12 +225,9 @@ class AiService
                         when: $this->retryWhen(),
                     );
 
-                if ($prompt->reasoning !== null) {
-                    $builder = $builder->withProviderOptions([
-                        'reasoning' => is_int($prompt->reasoning)
-                            ? ['max_tokens' => $prompt->reasoning]
-                            : ['effort' => $prompt->reasoning],
-                    ]);
+                $reasoningOptions = $prompt->resolveReasoningOptions($provider, $resolvedMaxTokens);
+                if ($reasoningOptions !== []) {
+                    $builder = $builder->withProviderOptions($reasoningOptions);
                 }
 
                 $ctx->response = $builder->asText();
@@ -478,6 +477,7 @@ class AiService
         $clientOptions = $this->clientOptions();
 
         $startTime = microtime(true);
+        $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['text'];
 
         $builder = Prism::text()
             ->using($provider, $model)
@@ -485,15 +485,12 @@ class AiService
             ->withMessages($messages->all())
             ->withTools($this->getTools())
             ->withMaxSteps($steps)
-            ->withMaxTokens($prompt->maxTokens ?? $maxTokens['text'])
+            ->withMaxTokens($resolvedMaxTokens)
             ->withClientOptions($clientOptions);
 
-        if ($prompt->reasoning !== null) {
-            $builder = $builder->withProviderOptions([
-                'reasoning' => is_int($prompt->reasoning)
-                    ? ['max_tokens' => $prompt->reasoning]
-                    : ['effort' => $prompt->reasoning],
-            ]);
+        $reasoningOptions = $prompt->resolveReasoningOptions($provider, $resolvedMaxTokens);
+        if ($reasoningOptions !== []) {
+            $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
         $stream = $builder->asStream();
@@ -541,12 +538,13 @@ class AiService
 
         $maxTokens = $this->maxTokens();
         $clientOptions = $this->clientOptions();
+        $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['structured'];
 
         $builder = Prism::structured()
             ->using($provider, $model)
             ->withSchema($schema)
             ->withMessages($messages->all())
-            ->withMaxTokens($prompt->maxTokens ?? $maxTokens['structured'])
+            ->withMaxTokens($resolvedMaxTokens)
             ->withClientOptions($clientOptions)
             ->withClientRetry(
                 times: $this->retryTimes(),
@@ -558,12 +556,9 @@ class AiService
             $builder = $builder->withSystemPrompt($systemPrompt);
         }
 
-        if ($prompt->reasoning !== null) {
-            $builder = $builder->withProviderOptions([
-                'reasoning' => is_int($prompt->reasoning)
-                    ? ['max_tokens' => $prompt->reasoning]
-                    : ['effort' => $prompt->reasoning],
-            ]);
+        $reasoningOptions = $prompt->resolveReasoningOptions($provider, $resolvedMaxTokens);
+        if ($reasoningOptions !== []) {
+            $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
         $response = $builder->asStructured();
