@@ -14,7 +14,9 @@ Publish the config file:
 php artisan vendor:publish --tag=ai-workflow-config
 ```
 
-To enable request logging, also publish and run the migrations:
+**No database is required for core functionality.** Sending AI requests, prompt management, caching, middleware, streaming, and retry logic all work without migrations. A database is only needed if you enable request logging (`AI_WORKFLOW_LOGGING=true`) or use the eval framework.
+
+To enable request logging or evals, publish and run the migrations:
 
 ```bash
 php artisan vendor:publish --tag=ai-workflow-migrations
