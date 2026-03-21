@@ -33,6 +33,7 @@ model: openrouter:google/gemini-3-pro-preview
 fallback_model: openrouter:openai/gpt-5.2
 tags: [classification, intent]
 cache_ttl: 3600
+reasoning: high
 ---
 
 You are a helpful assistant that answers questions concisely.
@@ -43,6 +44,8 @@ Front-matter fields:
 - `fallback_model` (optional): If structured decoding fails, retry with this model. Same `provider:model` format.
 - `tags` (optional): Array of string tags stored with each request for filtering.
 - `cache_ttl` (optional): Cache responses for this many seconds. Omit to disable caching.
+- `reasoning` (optional): Enable extended thinking / reasoning. Accepts an effort level string (`xhigh`, `high`, `medium`, `low`, `minimal`, `none`) or an integer token budget (e.g. `8000`). Automatically translated to provider-specific options (Anthropic `budgetTokens`, Gemini `thinkingLevel`/`thinkingBudget`, OpenRouter `reasoning.effort`, etc.).
+- `max_tokens` (optional): Override the global max output tokens for this prompt. Defaults to `16384` for text and `32768` for structured responses (configurable in `ai-workflow.max_tokens`).
 
 The prompt's `id` is derived from the filename. A file at `resources/prompts/my_prompt.md` is `my_prompt`.
 
