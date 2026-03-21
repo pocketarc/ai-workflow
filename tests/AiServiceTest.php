@@ -8,10 +8,12 @@ use AiWorkflow\AiService;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
+use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Closure;
 use Generator;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
 use Prism\Prism\Enums\FinishReason;
@@ -402,7 +404,7 @@ class AiServiceTest extends TestCase
         $method = new \ReflectionMethod($service, 'retrySleep');
         $closure = $method->invoke($service);
 
-        $exception = new \Illuminate\Http\Client\RequestException(
+        $exception = new RequestException(
             new \Illuminate\Http\Client\Response(
                 new \GuzzleHttp\Psr7\Response(500)
             )
@@ -432,7 +434,7 @@ class AiServiceTest extends TestCase
         $method = new \ReflectionMethod($service, 'retrySleep');
         $closure = $method->invoke($service);
 
-        $exception = new \Illuminate\Http\Client\RequestException(
+        $exception = new RequestException(
             new \Illuminate\Http\Client\Response(
                 new \GuzzleHttp\Psr7\Response(500)
             )
@@ -583,7 +585,7 @@ class AiServiceTest extends TestCase
         $service->resolveToolsUsing(fn (): array => []);
         // startExecution requires logging; set currentExecution directly.
         $executionProp = new \ReflectionProperty($service, 'currentExecution');
-        $executionProp->setValue($service, new \AiWorkflow\Models\AiWorkflowExecution);
+        $executionProp->setValue($service, new AiWorkflowExecution);
 
         $service->flush();
 

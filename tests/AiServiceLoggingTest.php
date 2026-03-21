@@ -154,7 +154,7 @@ class AiServiceLoggingTest extends DatabaseTestCase
 
     public function test_execution_token_tracking(): void
     {
-        $usage = new \Prism\Prism\ValueObjects\Usage(100, 50);
+        $usage = new Usage(100, 50);
 
         Prism::fake([
             TextResponseFake::make()->withText('First')->withFinishReason(FinishReason::Stop)->withUsage($usage),
@@ -313,7 +313,7 @@ class AiServiceLoggingTest extends DatabaseTestCase
             TextResponseFake::make()
                 ->withText('Streamed')
                 ->withFinishReason(FinishReason::Stop)
-                ->withUsage(new \Prism\Prism\ValueObjects\Usage(80, 40)),
+                ->withUsage(new Usage(80, 40)),
         ]);
 
         $service = app(AiService::class);

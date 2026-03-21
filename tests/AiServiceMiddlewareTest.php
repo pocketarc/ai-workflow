@@ -19,6 +19,8 @@ use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Response;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use Prism\Prism\ValueObjects\Meta;
+use Prism\Prism\ValueObjects\Usage;
 
 class AiServiceMiddlewareTest extends TestCase
 {
@@ -171,8 +173,8 @@ class AiServiceMiddlewareTest extends TestCase
                     finishReason: FinishReason::Stop,
                     toolCalls: [],
                     toolResults: [],
-                    usage: new \Prism\Prism\ValueObjects\Usage(0, 0),
-                    meta: new \Prism\Prism\ValueObjects\Meta(id: '', model: 'test'),
+                    usage: new Usage(0, 0),
+                    meta: new Meta(id: '', model: 'test'),
                     messages: collect([]),
                 );
 

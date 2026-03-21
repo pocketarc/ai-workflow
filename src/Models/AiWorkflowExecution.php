@@ -6,9 +6,12 @@ namespace AiWorkflow\Models;
 
 use AiWorkflow\Models\Builders\AiWorkflowExecutionBuilder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Carbon;
 use Override;
 use stdClass;
 
@@ -27,9 +30,9 @@ use stdClass;
  * @property-read int $total_tokens
  * @property-read int $total_duration_ms
  * @property-read int $request_count
- * @property \Illuminate\Support\Carbon|null $created_at
- * @property \Illuminate\Support\Carbon|null $updated_at
- * @property-read \Illuminate\Database\Eloquent\Collection<int, \AiWorkflow\Models\AiWorkflowRequest> $requests
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
+ * @property-read Collection<int, AiWorkflowRequest> $requests
  * @property-read int|null $requests_count
  *
  * @method static AiWorkflowExecutionBuilder<static>|AiWorkflowExecution byName(string $name)
@@ -59,7 +62,7 @@ class AiWorkflowExecution extends Model
     }
 
     /**
-     * @param  \Illuminate\Database\Query\Builder  $query
+     * @param  Builder  $query
      * @return AiWorkflowExecutionBuilder<AiWorkflowExecution>
      */
     #[Override]

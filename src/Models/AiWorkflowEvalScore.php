@@ -6,6 +6,7 @@ namespace AiWorkflow\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * @method static \Illuminate\Database\Eloquent\Builder<static>|AiWorkflowEvalScore newModelQuery()
@@ -20,10 +21,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property array<string, mixed>|null $details
  * @property string|null $response_text
  * @property array<string, mixed>|null $structured_response
- * @property \Illuminate\Support\Carbon|null $created_at
- * @property \Illuminate\Support\Carbon|null $updated_at
- * @property-read \AiWorkflow\Models\AiWorkflowEvalRun $evalRun
- * @property-read \AiWorkflow\Models\AiWorkflowRequest $request
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
+ * @property-read AiWorkflowEvalRun $evalRun
+ * @property-read AiWorkflowRequest $request
  *
  * @mixin \Eloquent
  */

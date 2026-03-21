@@ -10,6 +10,7 @@ use AiWorkflow\PromptService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Prism\Prism\Contracts\Message;
+use Prism\Prism\Contracts\Schema;
 use Prism\Prism\Schema\BooleanSchema;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
@@ -264,7 +265,7 @@ class PromptTestCommand extends Command
         /** @var array<string, mixed> $structured */
         $structured = is_array($assertions['structured']) ? $assertions['structured'] : [];
 
-        /** @var list<\Prism\Prism\Contracts\Schema> $properties */
+        /** @var list<Schema> $properties */
         $properties = [];
         $required = [];
 

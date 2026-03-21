@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace AiWorkflow;
 
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Facades\Cache;
+use Prism\Prism\Contracts\Message;
 use Prism\Prism\Schema\ObjectSchema;
 
 class AiWorkflowCache
@@ -12,7 +14,7 @@ class AiWorkflowCache
     /**
      * Generate a deterministic cache key from the request parameters.
      *
-     * @param  array<int, \Prism\Prism\Contracts\Message>  $messages
+     * @param  array<int, Message>  $messages
      */
     public function generateKey(
         string $provider,
@@ -59,7 +61,7 @@ class AiWorkflowCache
         return $cacheConfig['enabled'];
     }
 
-    private function store(): \Illuminate\Contracts\Cache\Repository
+    private function store(): Repository
     {
         /** @var array{enabled: bool, store: string|null} $cacheConfig */
         $cacheConfig = config('ai-workflow.cache');

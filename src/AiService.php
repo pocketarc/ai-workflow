@@ -31,11 +31,13 @@ use Prism\Prism\Streaming\Events\StreamEndEvent;
 use Prism\Prism\Streaming\Events\StreamEvent;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Text\Response;
+use Prism\Prism\Text\Step;
 use Prism\Prism\Tool;
 use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Meta;
 use Prism\Prism\ValueObjects\Usage;
+use Spatie\LaravelData\Data;
 use Throwable;
 
 class AiService
@@ -417,7 +419,7 @@ class AiService
         string $dataClass,
         int $maxAttempts = 3,
     ): StructuredDataResult {
-        if (! class_exists(\Spatie\LaravelData\Data::class)) {
+        if (! class_exists(Data::class)) {
             throw new \RuntimeException('spatie/laravel-data is required to use sendStructuredData(). Install it with: composer require spatie/laravel-data');
         }
 
@@ -434,7 +436,7 @@ class AiService
                 $data = $dataClass::from($response->structured);
 
                 return new StructuredDataResult($data, $response, $response->usage);
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 if ($attempt === $maxAttempts) {
                     throw new StructuredValidationException($e->getMessage(), $attempt, $e);
                 }
@@ -891,7 +893,7 @@ class AiService
         $metaId = is_string($meta['id'] ?? null) ? $meta['id'] : '';
         $metaModel = is_string($meta['model'] ?? null) ? $meta['model'] : $model;
 
-        /** @var Collection<int, \Prism\Prism\Text\Step> $steps */
+        /** @var Collection<int, Step> $steps */
         $steps = collect([]);
 
         /** @var Collection<int, Message> $responseMessages */

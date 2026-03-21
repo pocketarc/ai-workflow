@@ -7,6 +7,8 @@ namespace AiWorkflow\Models;
 use AiWorkflow\Models\Builders\AiWorkflowRequestBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Carbon;
 use Override;
 
 /**
@@ -34,9 +36,9 @@ use Override;
  * @property array<string, mixed>|null $metadata
  * @property list<string>|null $tags
  * @property array<string, mixed>|null $template_variables
- * @property \Illuminate\Support\Carbon|null $created_at
- * @property \Illuminate\Support\Carbon|null $updated_at
- * @property-read \AiWorkflow\Models\AiWorkflowExecution|null $execution
+ * @property Carbon|null $created_at
+ * @property Carbon|null $updated_at
+ * @property-read AiWorkflowExecution|null $execution
  *
  * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byModel(string $model)
  * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byPrompt(string $promptId)
@@ -93,7 +95,7 @@ class AiWorkflowRequest extends Model
     }
 
     /**
-     * @param  \Illuminate\Database\Query\Builder  $query
+     * @param  Builder  $query
      * @return AiWorkflowRequestBuilder<AiWorkflowRequest>
      */
     #[Override]

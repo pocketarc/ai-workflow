@@ -8,6 +8,7 @@ use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
+use Symfony\Component\Yaml\Yaml;
 
 class PromptTestCommandTest extends TestCase
 {
@@ -175,7 +176,7 @@ class PromptTestCommandTest extends TestCase
         $this->tempFiles[] = $promptPath;
 
         $testPath = "{$basePath}/tests/{$name}.yaml";
-        file_put_contents($testPath, \Symfony\Component\Yaml\Yaml::dump($data, 4));
+        file_put_contents($testPath, Yaml::dump($data, 4));
         $this->tempFiles[] = $testPath;
 
         return $testPath;

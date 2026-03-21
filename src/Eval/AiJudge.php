@@ -8,6 +8,7 @@ use AiWorkflow\AiService;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use Illuminate\Support\Collection;
+use Prism\Prism\Contracts\Message;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
@@ -77,7 +78,7 @@ PROMPT;
 
         $aiService = app(AiService::class);
 
-        /** @var \Illuminate\Support\Collection<int, \Prism\Prism\Contracts\Message> $messages */
+        /** @var Collection<int, Message> $messages */
         $messages = new Collection([new UserMessage($userContent)]);
 
         $judgeResponse = $aiService->sendStructuredMessages(
