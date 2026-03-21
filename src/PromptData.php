@@ -19,7 +19,7 @@ class PromptData
         public readonly array $tags = [],
         public readonly ?int $cacheTtl = null,
         public readonly array $variables = [],
-        public readonly ?string $reasoning = null,
+        public readonly string|int|null $reasoning = null,
         public readonly ?int $maxTokens = null,
     ) {}
 

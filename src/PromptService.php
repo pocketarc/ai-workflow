@@ -62,7 +62,7 @@ class PromptService
             tags: $parsedTags,
             cacheTtl: is_int($cacheTtl) ? $cacheTtl : null,
             variables: $variables,
-            reasoning: is_string($reasoning) ? $reasoning : null,
+            reasoning: is_string($reasoning) || is_int($reasoning) ? $reasoning : null,
             maxTokens: is_int($maxTokens) ? $maxTokens : null,
         );
     }

@@ -225,7 +225,9 @@ class AiService
 
                 if ($prompt->reasoning !== null) {
                     $builder = $builder->withProviderOptions([
-                        'reasoning' => ['effort' => $prompt->reasoning],
+                        'reasoning' => is_int($prompt->reasoning)
+                            ? ['max_tokens' => $prompt->reasoning]
+                            : ['effort' => $prompt->reasoning],
                     ]);
                 }
 
@@ -488,7 +490,9 @@ class AiService
 
         if ($prompt->reasoning !== null) {
             $builder = $builder->withProviderOptions([
-                'reasoning' => ['effort' => $prompt->reasoning],
+                'reasoning' => is_int($prompt->reasoning)
+                    ? ['max_tokens' => $prompt->reasoning]
+                    : ['effort' => $prompt->reasoning],
             ]);
         }
 
@@ -556,7 +560,9 @@ class AiService
 
         if ($prompt->reasoning !== null) {
             $builder = $builder->withProviderOptions([
-                'reasoning' => ['effort' => $prompt->reasoning],
+                'reasoning' => is_int($prompt->reasoning)
+                    ? ['max_tokens' => $prompt->reasoning]
+                    : ['effort' => $prompt->reasoning],
             ]);
         }
 

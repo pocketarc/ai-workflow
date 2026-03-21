@@ -142,4 +142,25 @@ class PromptServiceTest extends TestCase
 
         $this->assertNull($prompt->cacheTtl);
     }
+
+    public function test_load_parses_reasoning_effort_as_string(): void
+    {
+        $prompt = $this->service->load('reasoning_effort_prompt');
+
+        $this->assertSame('high', $prompt->reasoning);
+    }
+
+    public function test_load_parses_reasoning_max_tokens_as_int(): void
+    {
+        $prompt = $this->service->load('reasoning_tokens_prompt');
+
+        $this->assertSame(8000, $prompt->reasoning);
+    }
+
+    public function test_load_returns_null_reasoning_when_not_specified(): void
+    {
+        $prompt = $this->service->load('test_prompt');
+
+        $this->assertNull($prompt->reasoning);
+    }
 }
