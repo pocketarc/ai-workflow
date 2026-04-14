@@ -16,7 +16,7 @@
         "ext-curl": "*",
         "illuminate/support": "^11.0|^12.0|^13.0",
         "mustache/mustache": "^3.0",
-        "prism-php/prism": ">=0.99.0, <1.0.0",
+        "prism-php/prism": "dev-feature/openrouter-reasoning as 0.99.99",
         "spatie/yaml-front-matter": "^2.0"
     },
     "require-dev": {
@@ -54,5 +54,12 @@
         "allow-plugins": {
             "phpstan/extension-installer": true
         }
-    }
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/pocketarc/prism.git",
+            "canonical": false
+        }
+    ]
 }
