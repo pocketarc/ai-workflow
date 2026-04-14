@@ -874,7 +874,7 @@ class AiService
             $body = is_string($converted) ? $converted : '';
         }
 
-        return strlen($body) > $limit ? substr($body, 0, $limit).'…[truncated]' : $body;
+        return strlen($body) > $limit ? mb_strcut($body, 0, $limit, 'UTF-8').'…[truncated]' : $body;
     }
 
     /**
