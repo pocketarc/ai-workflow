@@ -9,12 +9,17 @@ use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use GuzzleHttp\Psr7\Response;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Client\Response as HttpClientResponse;
 use Prism\Prism\Enums\FinishReason;
+use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Usage;
+use ReflectionMethod;
 
 class AiServiceLoggingTest extends DatabaseTestCase
 {
@@ -112,6 +117,87 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertNotNull($request);
         $this->assertNotNull($request->error);
         $this->assertStringContainsString('Unexpected AI finish reason', $request->error);
+        $this->assertSame(PrismException::class, $request->error_class);
+        $this->assertNull($request->http_status);
+        $this->assertNull($request->response_body);
+    }
+
+    public function test_extract_http_details_reads_prism_exception_fields(): void
+    {
+        $exception = PrismException::providerResponseError(
+            'OpenRouter Bad Request: Provider returned error',
+            httpStatus: 400,
+            responseBody: '{"error":{"message":"bad"}}',
+        );
+
+        $details = $this->invokeExtractHttpDetails($exception);
+
+        $this->assertSame(400, $details['status']);
+        $this->assertSame('{"error":{"message":"bad"}}', $details['body']);
+    }
+
+    public function test_extract_http_details_walks_chain_for_request_exception(): void
+    {
+        $psrResponse = new Response(400, [], '{"error":"bad"}');
+        $httpResponse = new HttpClientResponse($psrResponse);
+        $requestException = new RequestException($httpResponse);
+        $wrapper = PrismException::providerRequestError('openrouter:test-model', $requestException);
+
+        $details = $this->invokeExtractHttpDetails($wrapper);
+
+        $this->assertSame(400, $details['status']);
+        $this->assertSame('{"error":"bad"}', $details['body']);
+    }
+
+    public function test_extract_http_details_returns_null_without_http_context(): void
+    {
+        $details = $this->invokeExtractHttpDetails(new \RuntimeException('boom'));
+
+        $this->assertNull($details['status']);
+        $this->assertNull($details['body']);
+    }
+
+    public function test_sanitize_response_body_truncates_oversized_body(): void
+    {
+        $body = str_repeat('a', 70_000);
+
+        $sanitized = $this->invokeSanitizeResponseBody($body);
+
+        $this->assertNotNull($sanitized);
+        $this->assertStringEndsWith('…[truncated]', $sanitized);
+        $this->assertSame(65_536 + strlen('…[truncated]'), strlen($sanitized));
+    }
+
+    public function test_sanitize_response_body_strips_invalid_utf8(): void
+    {
+        $invalid = "valid prefix \xc3\x28 suffix";
+        $this->assertFalse(mb_check_encoding($invalid, 'UTF-8'));
+
+        $sanitized = $this->invokeSanitizeResponseBody($invalid);
+
+        $this->assertNotNull($sanitized);
+        $this->assertTrue(mb_check_encoding($sanitized, 'UTF-8'));
+    }
+
+    /**
+     * @return array{status: ?int, body: ?string}
+     */
+    private function invokeExtractHttpDetails(?\Throwable $error): array
+    {
+        $method = new ReflectionMethod(AiService::class, 'extractHttpDetails');
+        /** @var array{status: ?int, body: ?string} $result */
+        $result = $method->invoke(app(AiService::class), $error);
+
+        return $result;
+    }
+
+    private function invokeSanitizeResponseBody(?string $body, int $limit = 65536): ?string
+    {
+        $method = new ReflectionMethod(AiService::class, 'sanitizeResponseBody');
+        /** @var ?string $result */
+        $result = $method->invoke(app(AiService::class), $body, $limit);
+
+        return $result;
     }
 
     public function test_start_execution_without_logging_is_noop(): void

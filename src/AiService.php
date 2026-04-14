@@ -808,6 +808,8 @@ class AiService
             return;
         }
 
+        $httpDetails = $this->extractHttpDetails($error);
+
         AiWorkflowRequest::create([
             'execution_id' => $this->currentExecution?->id,
             'prompt_id' => $prompt->id,
@@ -825,9 +827,54 @@ class AiService
             'duration_ms' => (int) $durationMs,
             'schema' => $schema?->toArray(),
             'error' => $error?->getMessage(),
+            'error_class' => $error !== null ? $error::class : null,
+            'http_status' => $httpDetails['status'],
+            'response_body' => $httpDetails['body'],
             'tags' => $this->resolveTags($prompt),
             'template_variables' => $prompt->variables !== [] ? $prompt->variables : null,
         ]);
+    }
+
+    /**
+     * Extract HTTP status and response body from the exception chain, if any.
+     *
+     * @return array{status: ?int, body: ?string}
+     */
+    private function extractHttpDetails(?Throwable $error): array
+    {
+        for ($e = $error; $e !== null; $e = $e->getPrevious()) {
+            if ($e instanceof PrismException && ($e->httpStatus !== null || $e->responseBody !== null)) {
+                return [
+                    'status' => $e->httpStatus,
+                    'body' => $this->sanitizeResponseBody($e->responseBody),
+                ];
+            }
+            if ($e instanceof RequestException && $e->response !== null) {
+                return [
+                    'status' => $e->response->status(),
+                    'body' => $this->sanitizeResponseBody($e->response->body()),
+                ];
+            }
+        }
+
+        return ['status' => null, 'body' => null];
+    }
+
+    /**
+     * Ensure the response body is safe to store: valid UTF-8 and capped at $limit bytes.
+     */
+    private function sanitizeResponseBody(?string $body, int $limit = 65536): ?string
+    {
+        if ($body === null || $body === '') {
+            return $body;
+        }
+
+        if (! mb_check_encoding($body, 'UTF-8')) {
+            $converted = mb_convert_encoding($body, 'UTF-8', 'UTF-8');
+            $body = is_string($converted) ? $converted : '';
+        }
+
+        return strlen($body) > $limit ? mb_strcut($body, 0, $limit, 'UTF-8').'…[truncated]' : $body;
     }
 
     /**

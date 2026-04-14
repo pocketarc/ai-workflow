@@ -33,6 +33,9 @@ use Override;
  * @property int $duration_ms
  * @property array<string, mixed>|null $schema
  * @property string|null $error
+ * @property int|null $http_status
+ * @property string|null $response_body
+ * @property string|null $error_class
  * @property array<string, mixed>|null $metadata
  * @property list<string>|null $tags
  * @property array<string, mixed>|null $template_variables
@@ -70,6 +73,9 @@ class AiWorkflowRequest extends Model
         'duration_ms',
         'schema',
         'error',
+        'http_status',
+        'response_body',
+        'error_class',
         'metadata',
         'tags',
         'template_variables',
@@ -91,6 +97,7 @@ class AiWorkflowRequest extends Model
             'output_tokens' => 'integer',
             'thought_tokens' => 'integer',
             'duration_ms' => 'integer',
+            'http_status' => 'integer',
         ];
     }
 
