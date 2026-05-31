@@ -170,7 +170,7 @@ class PromptTestCommand extends Command
         $messages = $this->buildMessages($rawMessages);
 
         try {
-            if (isset($assertions['structured'])) {
+            if (array_key_exists('structured', $assertions)) {
                 $schema = $this->buildSchemaFromAssertions($assertions);
                 $response = $aiService->sendStructuredMessages($messages, $prompt, $schema);
                 $this->runAssertions($name, $assertions, $response);
@@ -214,7 +214,7 @@ class PromptTestCommand extends Command
     {
         $failures = [];
 
-        if (isset($assertions['contains'])) {
+        if (array_key_exists('contains', $assertions)) {
             $text = $response instanceof StructuredResponse
                 ? json_encode($response->structured, JSON_THROW_ON_ERROR)
                 : $response->text;
@@ -232,7 +232,7 @@ class PromptTestCommand extends Command
             }
         }
 
-        if (isset($assertions['structured']) && $response instanceof StructuredResponse) {
+        if (array_key_exists('structured', $assertions) && $response instanceof StructuredResponse) {
             /** @var array<string, mixed> $expected */
             $expected = is_array($assertions['structured']) ? $assertions['structured'] : [];
 
@@ -263,7 +263,7 @@ class PromptTestCommand extends Command
     private function buildSchemaFromAssertions(array $assertions): ObjectSchema
     {
         /** @var array<string, mixed> $structured */
-        $structured = is_array($assertions['structured']) ? $assertions['structured'] : [];
+        $structured = is_array($assertions['structured'] ?? null) ? $assertions['structured'] : [];
 
         /** @var list<Schema> $properties */
         $properties = [];

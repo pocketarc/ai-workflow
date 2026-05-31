@@ -250,7 +250,7 @@ class AiService
             $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, error: $exception);
             $this->dispatchFailedEvent($prompt, 'sendMessages', $model, $exception, $durationMs);
 
-            if ($retryAttempts > 0) {
+            if (($retryAttempts ?? 0) > 0) {
                 throw new RetriesExhaustedException($retryAttempts, $exception);
             }
             throw $exception;
@@ -327,7 +327,7 @@ class AiService
             $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessages', $model, $exception, $durationMs);
 
-            if ($retryAttempts > 0) {
+            if (($retryAttempts ?? 0) > 0) {
                 throw new RetriesExhaustedException($retryAttempts, $exception);
             }
             throw $exception;
@@ -396,7 +396,7 @@ class AiService
             $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $exception, $durationMs);
 
-            if ($retryAttempts > 0) {
+            if (($retryAttempts ?? 0) > 0) {
                 throw new RetriesExhaustedException($retryAttempts, $exception);
             }
             throw $exception;
@@ -665,6 +665,8 @@ class AiService
 
     /**
      * Build the retry sleep closure with optional jitter.
+     *
+     * @return Closure(int, Throwable): int
      */
     private function retrySleep(?int &$retryAttempts = null): Closure
     {
@@ -716,6 +718,8 @@ class AiService
 
     /**
      * Build the retry condition closure.
+     *
+     * @return Closure(Throwable): bool
      */
     private function retryWhen(): Closure
     {
@@ -870,8 +874,7 @@ class AiService
         }
 
         if (! mb_check_encoding($body, 'UTF-8')) {
-            $converted = mb_convert_encoding($body, 'UTF-8', 'UTF-8');
-            $body = is_string($converted) ? $converted : '';
+            $body = mb_convert_encoding($body, 'UTF-8', 'UTF-8');
         }
 
         return strlen($body) > $limit ? mb_strcut($body, 0, $limit, 'UTF-8').'…[truncated]' : $body;

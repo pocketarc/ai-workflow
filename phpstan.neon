@@ -1,13 +1,98 @@
+# bleedingEdge.neon is intentional; CI may break when new PHPStan releases arrive.
 includes:
-    - vendor/larastan/larastan/extension.neon
-    - vendor/phpstan/phpstan-strict-rules/rules.neon
+    - phar://phpstan.phar/conf/bleedingEdge.neon
 
 parameters:
+    level: 10
+
     paths:
         - src
-    level: 10
-    ignoreErrors:
-        # Eloquent's fluent interface triggers this incorrectly
-        - identifier: staticMethod.dynamicCall
+
     scanFiles:
         - _ide_helper.php
+
+    ergebnis:
+        # Named arguments improve readability for methods with many parameters.
+        noNamedArgument:
+            enabled: false
+        # Laravel requires extending framework base classes (Command, Model, ServiceProvider, etc.).
+        noExtends:
+            enabled: false
+        # Nullable parameters are standard PHP for optional args.
+        noParameterWithNullableTypeDeclaration:
+            enabled: false
+        noParameterWithNullDefaultValue:
+            enabled: false
+        # Nullable returns are idiomatic PHP/Laravel for "not found" / optional semantics.
+        noNullableReturnTypeDeclaration:
+            enabled: false
+        # Reasonable defaults in constructors are idiomatic PHP.
+        noConstructorParameterWithDefaultValue:
+            enabled: false
+        # Library package; consumers should be free to extend any class.
+        final:
+            enabled: false
+        finalInAbstractClass:
+            enabled: false
+
+    # Larastan checks
+    checkModelProperties: true
+    checkOctaneCompatibility: true
+    noEnvCallsOutsideOfConfig: true
+    checkModelAppends: true
+
+    # PHPStan strictness
+    checkTooWideReturnTypesInProtectedAndPublicMethods: true
+    checkUninitializedProperties: true
+    checkImplicitMixed: true
+    checkBenevolentUnionTypes: true
+    reportPossiblyNonexistentGeneralArrayOffset: true
+    reportPossiblyNonexistentConstantArrayOffset: true
+    reportAlwaysTrueInLastCondition: true
+    reportAnyTypeWideningInVarTag: true
+    checkMissingOverrideMethodAttribute: true
+    checkMissingCallableSignature: true
+
+    ignoreErrors:
+        # #[\Override] on properties is a PHPStan bleeding edge feature that breaks PHP 8.3 at runtime.
+        -
+            identifier: property.missingOverride
+            reportUnmatched: false
+        # Eloquent's fluent interface triggers this incorrectly.
+        - identifier: staticMethod.dynamicCall
+
+        # Laravel Pipeline immediately invokes the middleware closure; exceptions propagate correctly.
+        -
+            identifier: shipmonk.checkedExceptionInCallable
+            count: 1
+            path: src/AiService.php
+
+        # Generator methods must throw to signal errors to the consumer; this is the intended pattern.
+        -
+            identifier: shipmonk.checkedExceptionInYieldingMethod
+            count: 2
+            path: src/AiService.php
+
+        # Retry counter uses pass-by-reference intentionally to track attempts across the closure boundary.
+        -
+            identifier: ergebnis.noParameterPassedByReference
+            count: 2
+            path: src/AiService.php
+
+        # AiWorkflowContext is a mutable DTO passed through the middleware pipeline; properties must be writable.
+        -
+            identifier: shipmonk.publicPropertyNotReadonly
+            count: 6
+            path: src/Middleware/AiWorkflowContext.php
+
+        # Prism PHP union types include subtypes (Image/Document extend Media); we keep them explicit for API clarity.
+        -
+            identifier: shipmonk.nonNormalizedType
+            count: 6
+            path: src/MessageSerializer.php
+
+        # Laravel facade @method tags cannot express callable parameter signatures.
+        -
+            identifier: missingType.callable
+            count: 1
+            path: src/Facades/AiWorkflow.php

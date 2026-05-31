@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AiWorkflow\Console;
 
 use AiWorkflow\Models\AiWorkflowEvalDataset;
+use AiWorkflow\Models\AiWorkflowEvalDatasetEntry;
 use Illuminate\Console\Command;
 
 class EvalShowCommand extends Command
@@ -39,7 +40,7 @@ class EvalShowCommand extends Command
         $this->info("Dataset: {$name}");
         $this->newLine();
 
-        $rows = $entries->map(function ($entry): array {
+        $rows = $entries->map(function (AiWorkflowEvalDatasetEntry $entry): array {
             $execution = $entry->execution;
             $requestCount = $execution->requests->count();
             $models = $execution->requests->pluck('model')->unique()->implode(', ');

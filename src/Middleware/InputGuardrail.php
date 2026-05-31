@@ -6,9 +6,11 @@ namespace AiWorkflow\Middleware;
 
 use AiWorkflow\Exceptions\GuardrailViolationException;
 use Closure;
+use Override;
 
 abstract class InputGuardrail implements AiWorkflowMiddleware
 {
+    #[Override]
     public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
     {
         $this->validate($context);

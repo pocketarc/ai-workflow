@@ -54,6 +54,7 @@ class AiWorkflowExecution extends Model
     /**
      * @return array<string, string>
      */
+    #[Override]
     protected function casts(): array
     {
         return [
@@ -87,8 +88,23 @@ class AiWorkflowExecution extends Model
         return Attribute::make(get: fn (): stdClass => $this->requests()
             ->toBase()
             ->selectRaw('COALESCE(SUM(input_tokens), 0) as total_input, COALESCE(SUM(output_tokens), 0) as total_output, COALESCE(SUM(thought_tokens), 0) as total_thought, COALESCE(SUM(duration_ms), 0) as total_duration, COUNT(*) as total_count')
-            ->first() ?? (object) ['total_input' => 0, 'total_output' => 0, 'total_thought' => 0, 'total_duration' => 0, 'total_count' => 0]
+            ->first() ?? $this->defaultRequestStats()
         );
+    }
+
+    /**
+     * Zeroed request stats for executions that have no logged requests yet.
+     */
+    private function defaultRequestStats(): stdClass
+    {
+        $stats = new stdClass;
+        $stats->total_input = 0;
+        $stats->total_output = 0;
+        $stats->total_thought = 0;
+        $stats->total_duration = 0;
+        $stats->total_count = 0;
+
+        return $stats;
     }
 
     /**

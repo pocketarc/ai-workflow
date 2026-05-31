@@ -8,6 +8,7 @@ use AiWorkflow\AiService;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use Illuminate\Support\Collection;
+use Override;
 use Prism\Prism\Contracts\Message;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
@@ -51,6 +52,7 @@ PROMPT;
         private readonly ?string $judgePrompt = null,
     ) {}
 
+    #[Override]
     public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
     {
         $originalResponseText = $this->formatOriginalResponse($originalRequest);

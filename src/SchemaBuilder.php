@@ -93,17 +93,19 @@ class SchemaBuilder
                 throw new RuntimeException("Property '{$name}' has a union type that cannot be mapped to a schema");
             }
 
-            $type = $nonNullTypes[0];
+            $namedType = $nonNullTypes[0];
             $nullable = true;
+        } else {
+            $namedType = $type;
         }
 
-        if (! $type instanceof ReflectionNamedType) {
+        if (! $namedType instanceof ReflectionNamedType) {
             throw new RuntimeException("Property '{$name}' has an unsupported type");
         }
 
-        $nullable = $nullable || $type->allowsNull();
+        $nullable = $nullable || $namedType->allowsNull();
 
-        $schema = self::mapNamedType($type->getName(), $name, $description, $nullable, $param);
+        $schema = self::mapNamedType($namedType->getName(), $name, $description, $nullable, $param);
 
         return [$schema, $nullable];
     }
