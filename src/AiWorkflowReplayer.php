@@ -211,7 +211,7 @@ class AiWorkflowReplayer
             $description = is_string($prop['description'] ?? null) ? $prop['description'] : '';
             $type = is_string($prop['type'] ?? null) ? $prop['type'] : 'string';
 
-            if (isset($prop['enum']) && is_array($prop['enum'])) {
+            if (is_array($prop['enum'] ?? null)) {
                 /** @var list<string|int> $enumValues */
                 $enumValues = $prop['enum'];
                 $properties[] = new EnumSchema($name, $description, $enumValues);

@@ -16,9 +16,11 @@ use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Listeners\SentryBreadcrumbListener;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Override;
 
 class AiWorkflowServiceProvider extends ServiceProvider
 {
+    #[Override]
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/ai-workflow.php', 'ai-workflow');
