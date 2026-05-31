@@ -877,7 +877,14 @@ class AiService
             $body = mb_convert_encoding($body, 'UTF-8', 'UTF-8');
         }
 
-        return strlen($body) > $limit ? mb_strcut($body, 0, $limit, 'UTF-8').'…[truncated]' : $body;
+        if (strlen($body) <= $limit) {
+            return $body;
+        }
+
+        // Reserve room for the suffix so the stored string stays within the byte cap.
+        $suffix = '…[truncated]';
+
+        return mb_strcut($body, 0, max(0, $limit - strlen($suffix)), 'UTF-8').$suffix;
     }
 
     /**

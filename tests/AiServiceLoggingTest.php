@@ -165,7 +165,7 @@ class AiServiceLoggingTest extends DatabaseTestCase
 
         $this->assertNotNull($sanitized);
         $this->assertStringEndsWith('…[truncated]', $sanitized);
-        $this->assertSame(65_536 + strlen('…[truncated]'), strlen($sanitized));
+        $this->assertLessThanOrEqual(65_536, strlen($sanitized));
     }
 
     public function test_sanitize_response_body_strips_invalid_utf8(): void
