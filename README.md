@@ -1,6 +1,6 @@
 # AI Workflow
 
-Production-ready AI workflows for Laravel. Wraps [Prism PHP](https://github.com/prism-php/prism) with retry logic, fallback models, finish reason monitoring, YAML-based prompt management with Mustache templating, request logging with tagging, middleware pipeline, caching, multimodal support, eval framework, and Laravel Data integration.
+Production-ready AI workflows for Laravel. Wraps [Prism PHP](https://github.com/prism-php/prism) and routes OpenRouter calls through [laravel-integrations](https://github.com/pocketarc/laravel-integrations) for resilient transport: circuit breaking, retries, failure classification, and rate limiting. Adds fallback models, finish reason monitoring, YAML-based prompt management with Mustache templating, request logging with tagging, a middleware pipeline, caching, multimodal support, an eval framework, and Laravel Data integration.
 
 ## Installation
 
@@ -14,9 +14,19 @@ Publish the config file:
 php artisan vendor:publish --tag=ai-workflow-config
 ```
 
-**No database is required for core functionality.** Sending AI requests, prompt management, caching, middleware, streaming, and retry logic all work without migrations. A database is only needed if you enable request logging (`AI_WORKFLOW_LOGGING=true`) or use the eval framework.
+OpenRouter calls are routed through `pocketarc/laravel-integrations` (installed automatically as a dependency), which owns the circuit breaker, retries, and rate limiting. Publish and run its migrations, then create an OpenRouter integration:
 
-To enable request logging or evals, publish and run the migrations:
+```bash
+php artisan vendor:publish --tag=integrations-migrations
+php artisan migrate
+php artisan integrations:install openrouter --credential=api_key=YOUR_OPENROUTER_KEY
+```
+
+Prism authenticates to OpenRouter with its own `OPENROUTER_API_KEY` env var, so set that to the same key. The integration row holds the API key as the framework's credential record and carries the circuit-breaker and rate-limit state.
+
+A database is therefore required for OpenRouter requests: the integration row and its transport audit live there. Calls to providers without a registered integration (e.g. `anthropic:...`) fall back to Prism directly and need no database.
+
+Request logging and the eval framework add their own tables. Publish and run ai-workflow's migrations to enable them:
 
 ```bash
 php artisan vendor:publish --tag=ai-workflow-migrations
@@ -564,18 +574,17 @@ php artisan ai-workflow:prompt-test
 php artisan ai-workflow:prompt-test classify_intent --model=anthropic:claude-4
 ```
 
-## Retry Behaviour
+## Resilience
 
-All requests automatically retry on transient failures with random jitter (±25%) to prevent thundering herd:
+OpenRouter calls run through laravel-integrations, which owns the circuit breaker, retries, and rate limiting. Failures are classified so the breaker reacts correctly:
 
-- **HTTP 429** (rate limit): waits ~30 seconds before retry.
-- **HTTP 5xx** (server error): exponential backoff (~attempt x 2 seconds).
-- **Connection errors**: linear backoff (~attempt x 1 second).
-- **3 retries** by default, configurable via `ai-workflow.retry.times`.
+- **402 / 403 / other 4xx** are client errors: not retried, and they never trip the breaker. This stops a billing or access outage from becoming a retry storm.
+- **429** is a throttle: retried (honouring `Retry-After`) without tripping the breaker.
+- **5xx, connection errors, and timeouts** are upstream faults: retried with backoff and counted toward the breaker.
 
-Jitter can be disabled by setting `ai-workflow.retry.jitter` to `false`.
+Backoff is a fixed ~30s pause on rate limits and ~attempt x 2s on server errors, with optional ±25% jitter. Tune it via `ai-workflow.retry`: `times` sets the max attempts, and `rate_limit_delay_ms`, `server_error_multiplier_ms`, and `jitter` shape the backoff. When retries are exhausted, the underlying Prism exception propagates.
 
-If all retries are exhausted, a `RetriesExhaustedException` is thrown with the retry count and original exception.
+The breaker state, rate budget, and transport audit live on the integration row.
 
 ### Fallback Models
 

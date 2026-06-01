@@ -6,13 +6,22 @@ return [
     // Directory containing prompt markdown files with YAML front-matter.
     'prompts_path' => resource_path('prompts'),
 
-    // Retry configuration for transient HTTP errors.
+    // Transient-failure handling is owned by laravel-integrations (circuit
+    // breaker + retries). `times` is the per-request max attempts; the delay
+    // values feed OpenRouterProvider's CustomizesRetry backoff.
     'retry' => [
         'times' => 3,
         'rate_limit_delay_ms' => 30_000,
         'server_error_multiplier_ms' => 2_000,
-        'default_multiplier_ms' => 1_000,
         'jitter' => true,
+    ],
+
+    // OpenRouter integration settings.
+    'openrouter' => [
+        // Per-minute request budget for the OpenRouter integration, or null
+        // for unlimited. The circuit breaker is the primary protection; this
+        // is an optional secondary pacing limit honored by the framework.
+        'rate_limit_per_minute' => null,
     ],
 
     // Client options passed to Prism's withClientOptions().

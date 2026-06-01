@@ -16,6 +16,7 @@
         "ext-curl": "*",
         "illuminate/support": "^11.0|^12.0|^13.0",
         "mustache/mustache": "^3.0",
+        "pocketarc/laravel-integrations": "^5.0",
         "prism-php/prism": "dev-feature/openrouter-reasoning as 0.99.99",
         "spatie/yaml-front-matter": "^2.0"
     },

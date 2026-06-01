@@ -73,12 +73,6 @@ parameters:
             count: 2
             path: src/AiService.php
 
-        # Retry counter uses pass-by-reference intentionally to track attempts across the closure boundary.
-        -
-            identifier: ergebnis.noParameterPassedByReference
-            count: 2
-            path: src/AiService.php
-
         # AiWorkflowContext is a mutable DTO passed through the middleware pipeline; properties must be writable.
         -
             identifier: shipmonk.publicPropertyNotReadonly
