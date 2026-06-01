@@ -193,6 +193,10 @@ class AiService
         $configSteps = config('ai-workflow.max_steps', 15);
         $steps ??= is_int($configSteps) ? $configSteps : 15;
 
+        // Resolve before the cache check so a managed-provider misconfiguration
+        // (missing or duplicate Integration row) fails loudly even on a cache hit.
+        $integration = $this->resolveIntegration($provider);
+
         $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
         if ($cached !== null) {
             return $cached;
@@ -213,7 +217,7 @@ class AiService
         try {
             $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['text'];
 
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, $steps, $resolvedMaxTokens, $clientOptions): AiWorkflowContext {
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, $steps, $resolvedMaxTokens, $clientOptions, $integration): AiWorkflowContext {
                 $builder = Prism::text()
                     ->using($provider, $model)
                     ->withSystemPrompt($ctx->systemPrompt)
@@ -228,7 +232,6 @@ class AiService
                     $builder = $builder->withProviderOptions($reasoningOptions);
                 }
 
-                $integration = $this->resolveIntegration($provider);
                 $ctx->response = $this->requestText($integration, fn (): Response => $builder->asText());
 
                 return $ctx;
@@ -268,6 +271,10 @@ class AiService
         $effectiveModelIdentifier = $modelOverride ?? $prompt->model;
         [$provider, $model] = PromptData::parseModelIdentifier($effectiveModelIdentifier);
 
+        // Resolve before the cache check so a managed-provider misconfiguration
+        // fails loudly even on a cache hit.
+        $integration = $this->resolveIntegration($provider);
+
         $cached = $this->getCachedStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema);
         if ($cached !== null) {
             return $cached;
@@ -284,13 +291,14 @@ class AiService
         $startTime = microtime(true);
 
         try {
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier): AiWorkflowContext {
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, $integration): AiWorkflowContext {
                 $ctx->response = $this->executeStructuredRequest(
                     new Collection($ctx->messages),
                     $ctx->prompt,
                     $schema,
                     $effectiveModelIdentifier,
                     $ctx->systemPrompt,
+                    $integration,
                 );
 
                 return $ctx;
@@ -519,6 +527,9 @@ class AiService
      * When null, no system prompt is set (used by sendStructuredMessagesWithTools
      * where the second step is purely "parse this text into JSON").
      *
+     * Callers that already resolved the integration (e.g. to validate before a
+     * cache check) pass it in; when null it is resolved from the model.
+     *
      * @param  Collection<int, Message>  $messages
      */
     private function executeStructuredRequest(
@@ -527,6 +538,7 @@ class AiService
         ObjectSchema $schema,
         string $modelIdentifier,
         ?string $systemPrompt = null,
+        ?Integration $integration = null,
     ): StructuredResponse {
         [$provider, $model] = PromptData::parseModelIdentifier($modelIdentifier);
 
@@ -550,7 +562,7 @@ class AiService
             $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
-        $integration = $this->resolveIntegration($provider);
+        $integration ??= $this->resolveIntegration($provider);
 
         return $this->requestStructured($integration, fn (): StructuredResponse => $builder->asStructured());
     }

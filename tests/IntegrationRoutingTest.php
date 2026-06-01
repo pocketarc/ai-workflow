@@ -151,6 +151,41 @@ class IntegrationRoutingTest extends DatabaseTestCase
         app(AiService::class)->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
     }
 
+    public function test_cache_hit_still_validates_the_managed_integration(): void
+    {
+        config()->set('ai-workflow.cache.enabled', true);
+        config()->set('ai-workflow.cache.store', 'array');
+
+        $prompt = new PromptData(
+            id: 'cached',
+            model: 'openrouter:test-model',
+            prompt: 'You are helpful.',
+            cacheTtl: 3600,
+        );
+
+        Prism::fake([
+            TextResponseFake::make()->withText('Cached'),
+        ]);
+
+        $service = app(AiService::class);
+
+        // Warm the cache with a valid single integration.
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+
+        // A duplicate introduced while the cache is warm must still be caught:
+        // resolution runs before the cache short-circuit.
+        $this->createIntegration(
+            providerKey: 'openrouter',
+            providerClass: OpenRouterProvider::class,
+            credentials: ['api_key' => 'second-key'],
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage("Multiple Integration rows exist for provider 'openrouter'");
+
+        $service->sendMessages(collect([new UserMessage('Hello')]), $prompt);
+    }
+
     public function test_unmanaged_provider_falls_back_to_direct_prism(): void
     {
         // anthropic has no registered provider/integration, so the call should
