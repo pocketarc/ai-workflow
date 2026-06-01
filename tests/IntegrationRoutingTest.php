@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Integrations\OpenRouterProvider;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
@@ -19,6 +20,7 @@ use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Request as TextRequest;
 use Prism\Prism\Text\Response as TextResponse;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -130,6 +132,23 @@ class IntegrationRoutingTest extends DatabaseTestCase
         // closed here).
         $this->assertSame(3, $fake->calls);
         $this->assertSame(3, $this->openRouterIntegration()->consecutive_failures);
+    }
+
+    public function test_duplicate_integrations_for_a_provider_fail_loudly(): void
+    {
+        // The base TestCase already seeds one openrouter integration; a second
+        // makes resolution ambiguous, which must throw rather than silently
+        // pick one account's credentials and breaker.
+        $this->createIntegration(
+            providerKey: 'openrouter',
+            providerClass: OpenRouterProvider::class,
+            credentials: ['api_key' => 'second-key'],
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage("Multiple Integration rows exist for provider 'openrouter'");
+
+        app(AiService::class)->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
     }
 
     public function test_unmanaged_provider_falls_back_to_direct_prism(): void

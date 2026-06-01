@@ -640,9 +640,9 @@ class AiService
      * Resolve the Integration row for a provider key, or null when the provider
      * isn't managed by laravel-integrations (those call Prism directly).
      *
-     * A provider that IS registered but has no row is a misconfiguration we
-     * fail loudly on, so a missing OpenRouter row can't silently bypass the
-     * breaker and re-open the retry storm.
+     * Misconfigurations fail loudly rather than silently bypassing or
+     * mis-targeting the breaker: a registered provider with no row throws, and
+     * so does an ambiguous provider with more than one row.
      */
     private function resolveIntegration(string $provider): ?Integration
     {
@@ -650,15 +650,21 @@ class AiService
             return null;
         }
 
-        $integration = Integration::query()->where('provider', $provider)->orderBy('id')->first();
+        $integrations = Integration::query()->where('provider', $provider)->orderBy('id')->take(2)->get();
 
-        if ($integration === null) {
+        if ($integrations->isEmpty()) {
             throw new \RuntimeException(
                 "Provider '{$provider}' is registered with laravel-integrations but has no Integration row. Create one (e.g. `php artisan integrations:install {$provider}`) before making AI requests."
             );
         }
 
-        return $integration;
+        if ($integrations->count() > 1) {
+            throw new \RuntimeException(
+                "Multiple Integration rows exist for provider '{$provider}'; ai-workflow expects exactly one so the right credentials and circuit breaker are used. Remove the duplicates."
+            );
+        }
+
+        return $integrations->first();
     }
 
     /**
