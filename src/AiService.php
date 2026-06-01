@@ -193,15 +193,6 @@ class AiService
         $configSteps = config('ai-workflow.max_steps', 15);
         $steps ??= is_int($configSteps) ? $configSteps : 15;
 
-        // Resolve before the cache check so a managed-provider misconfiguration
-        // (missing or duplicate Integration row) fails loudly even on a cache hit.
-        $integration = $this->resolveIntegration($provider);
-
-        $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
-        if ($cached !== null) {
-            return $cached;
-        }
-
         $maxTokens = $this->maxTokens();
         $clientOptions = $this->clientOptions();
 
@@ -215,6 +206,17 @@ class AiService
         $startTime = microtime(true);
 
         try {
+            // Resolve before the cache check so a managed-provider
+            // misconfiguration (missing or duplicate Integration row) fails
+            // loudly even on a cache hit, and inside the try so the failure is
+            // logged and dispatched like any other.
+            $integration = $this->resolveIntegration($provider);
+
+            $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
+            if ($cached !== null) {
+                return $cached;
+            }
+
             $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['text'];
 
             $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, $steps, $resolvedMaxTokens, $clientOptions, $integration): AiWorkflowContext {
@@ -271,15 +273,6 @@ class AiService
         $effectiveModelIdentifier = $modelOverride ?? $prompt->model;
         [$provider, $model] = PromptData::parseModelIdentifier($effectiveModelIdentifier);
 
-        // Resolve before the cache check so a managed-provider misconfiguration
-        // fails loudly even on a cache hit.
-        $integration = $this->resolveIntegration($provider);
-
-        $cached = $this->getCachedStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema);
-        if ($cached !== null) {
-            return $cached;
-        }
-
         $context = new AiWorkflowContext(
             messages: array_values($messages->all()),
             prompt: $prompt,
@@ -291,6 +284,16 @@ class AiService
         $startTime = microtime(true);
 
         try {
+            // Resolve before the cache check so a managed-provider
+            // misconfiguration fails loudly even on a cache hit, and inside the
+            // try so the failure is logged and dispatched like any other.
+            $integration = $this->resolveIntegration($provider);
+
+            $cached = $this->getCachedStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema);
+            if ($cached !== null) {
+                return $cached;
+            }
+
             $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, $integration): AiWorkflowContext {
                 $ctx->response = $this->executeStructuredRequest(
                     new Collection($ctx->messages),

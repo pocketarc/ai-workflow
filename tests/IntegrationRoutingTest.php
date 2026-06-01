@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Integrations\OpenRouterProvider;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use Illuminate\Support\Facades\Event;
 use Integrations\Models\Integration;
 use Prism\Prism\Enums\Provider as ProviderEnum;
 use Prism\Prism\Exceptions\PrismException;
@@ -149,6 +151,31 @@ class IntegrationRoutingTest extends DatabaseTestCase
         $this->expectExceptionMessage("Multiple Integration rows exist for provider 'openrouter'");
 
         app(AiService::class)->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+    }
+
+    public function test_integration_misconfiguration_is_logged_and_dispatched(): void
+    {
+        Event::fake([AiWorkflowRequestFailed::class]);
+
+        $this->createIntegration(
+            providerKey: 'openrouter',
+            providerClass: OpenRouterProvider::class,
+            credentials: ['api_key' => 'second-key'],
+        );
+
+        try {
+            app(AiService::class)->sendMessages(collect([new UserMessage('Hello')]), $this->makePrompt());
+            $this->fail('Expected the duplicate integration to throw.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Multiple Integration rows exist', $e->getMessage());
+        }
+
+        // The misconfiguration flows through the normal failure path: a logged
+        // request and a dispatched failure event, not a silent throw.
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertStringContainsString('Multiple Integration rows exist', (string) $request->error);
+        Event::assertDispatched(AiWorkflowRequestFailed::class);
     }
 
     public function test_cache_hit_still_validates_the_managed_integration(): void
