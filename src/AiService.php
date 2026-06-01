@@ -491,9 +491,11 @@ class AiService
             $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
-        $integration = $this->resolveIntegration($provider);
-
         try {
+            // Resolve inside the try so a managed-provider misconfiguration is
+            // logged and dispatched, matching sendMessages/sendStructuredMessages.
+            $integration = $this->resolveIntegration($provider);
+
             // Streaming bypasses the request executor — a Generator can't flow
             // through its response wrapping/retry — but we still honour the
             // circuit breaker so a known-down OpenRouter fails fast.

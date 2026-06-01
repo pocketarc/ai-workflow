@@ -178,6 +178,31 @@ class IntegrationRoutingTest extends DatabaseTestCase
         Event::assertDispatched(AiWorkflowRequestFailed::class);
     }
 
+    public function test_stream_misconfiguration_is_logged_and_dispatched(): void
+    {
+        Event::fake([AiWorkflowRequestFailed::class]);
+
+        $this->createIntegration(
+            providerKey: 'openrouter',
+            providerClass: OpenRouterProvider::class,
+            credentials: ['api_key' => 'second-key'],
+        );
+
+        try {
+            foreach (app(AiService::class)->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+                // Drain the generator; resolution throws on first iteration.
+            }
+            $this->fail('Expected the duplicate integration to throw.');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('Multiple Integration rows exist', $e->getMessage());
+        }
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertStringContainsString('Multiple Integration rows exist', (string) $request->error);
+        Event::assertDispatched(AiWorkflowRequestFailed::class);
+    }
+
     public function test_cache_hit_still_validates_the_managed_integration(): void
     {
         config()->set('ai-workflow.cache.enabled', true);
