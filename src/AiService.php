@@ -6,7 +6,6 @@ namespace AiWorkflow;
 
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
-use AiWorkflow\Exceptions\RetriesExhaustedException;
 use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
@@ -14,16 +13,15 @@ use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Closure;
 use Generator;
-use Illuminate\Http\Client\ConnectionException;
-use Illuminate\Http\Client\RequestException;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Integrations\CircuitBreaker;
+use Integrations\IntegrationManager;
+use Integrations\Models\Integration;
 use Prism\Prism\Contracts\Message;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Exceptions\PrismException;
-use Prism\Prism\Exceptions\PrismProviderOverloadedException;
-use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ObjectSchema;
@@ -42,6 +40,12 @@ use Throwable;
 
 class AiService
 {
+    /**
+     * Endpoint label recorded on integration_requests for OpenRouter calls.
+     * OpenRouter serves both text and structured generations from here.
+     */
+    private const PROVIDER_ENDPOINT = 'chat/completions';
+
     /** @var array<string, mixed> */
     private array $context = [];
 
@@ -186,14 +190,8 @@ class AiService
         [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
         $extraPrompt = $extraContext !== null ? $extraContext->prompt : '';
         $systemPrompt = trim($extraPrompt."\n\n".$prompt->prompt);
-        $retryAttempts = 0;
         $configSteps = config('ai-workflow.max_steps', 15);
         $steps ??= is_int($configSteps) ? $configSteps : 15;
-
-        $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
-        if ($cached !== null) {
-            return $cached;
-        }
 
         $maxTokens = $this->maxTokens();
         $clientOptions = $this->clientOptions();
@@ -208,9 +206,20 @@ class AiService
         $startTime = microtime(true);
 
         try {
+            // Resolve before the cache check so a managed-provider
+            // misconfiguration (missing or duplicate Integration row) fails
+            // loudly even on a cache hit, and inside the try so the failure is
+            // logged and dispatched like any other.
+            $integration = $this->resolveIntegration($provider);
+
+            $cached = $this->getCachedTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt);
+            if ($cached !== null) {
+                return $cached;
+            }
+
             $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['text'];
 
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, &$retryAttempts, $steps, $resolvedMaxTokens, $clientOptions): AiWorkflowContext {
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, $steps, $resolvedMaxTokens, $clientOptions, $integration): AiWorkflowContext {
                 $builder = Prism::text()
                     ->using($provider, $model)
                     ->withSystemPrompt($ctx->systemPrompt)
@@ -218,19 +227,14 @@ class AiService
                     ->withTools($this->getTools())
                     ->withMaxSteps($steps)
                     ->withMaxTokens($resolvedMaxTokens)
-                    ->withClientOptions($clientOptions)
-                    ->withClientRetry(
-                        times: $this->retryTimes(),
-                        sleepMilliseconds: $this->retrySleep($retryAttempts),
-                        when: $this->retryWhen(),
-                    );
+                    ->withClientOptions($clientOptions);
 
                 $reasoningOptions = $prompt->resolveReasoningOptions($provider, $resolvedMaxTokens);
                 if ($reasoningOptions !== []) {
                     $builder = $builder->withProviderOptions($reasoningOptions);
                 }
 
-                $ctx->response = $builder->asText();
+                $ctx->response = $this->requestText($integration, fn (): Response => $builder->asText());
 
                 return $ctx;
             });
@@ -250,9 +254,6 @@ class AiService
             $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, error: $exception);
             $this->dispatchFailedEvent($prompt, 'sendMessages', $model, $exception, $durationMs);
 
-            if (($retryAttempts ?? 0) > 0) {
-                throw new RetriesExhaustedException($retryAttempts, $exception);
-            }
             throw $exception;
         }
     }
@@ -272,11 +273,6 @@ class AiService
         $effectiveModelIdentifier = $modelOverride ?? $prompt->model;
         [$provider, $model] = PromptData::parseModelIdentifier($effectiveModelIdentifier);
 
-        $cached = $this->getCachedStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema);
-        if ($cached !== null) {
-            return $cached;
-        }
-
         $context = new AiWorkflowContext(
             messages: array_values($messages->all()),
             prompt: $prompt,
@@ -285,18 +281,27 @@ class AiService
             schema: $schema,
         );
 
-        $retryAttempts = 0;
         $startTime = microtime(true);
 
         try {
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, &$retryAttempts): AiWorkflowContext {
+            // Resolve before the cache check so a managed-provider
+            // misconfiguration fails loudly even on a cache hit, and inside the
+            // try so the failure is logged and dispatched like any other.
+            $integration = $this->resolveIntegration($provider);
+
+            $cached = $this->getCachedStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema);
+            if ($cached !== null) {
+                return $cached;
+            }
+
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, $integration): AiWorkflowContext {
                 $ctx->response = $this->executeStructuredRequest(
                     new Collection($ctx->messages),
                     $ctx->prompt,
                     $schema,
                     $effectiveModelIdentifier,
                     $ctx->systemPrompt,
-                    $retryAttempts,
+                    $integration,
                 );
 
                 return $ctx;
@@ -327,9 +332,6 @@ class AiService
             $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessages', $model, $exception, $durationMs);
 
-            if (($retryAttempts ?? 0) > 0) {
-                throw new RetriesExhaustedException($retryAttempts, $exception);
-            }
             throw $exception;
         }
     }
@@ -369,11 +371,10 @@ class AiService
         $newMessages = new Collection($messageList);
 
         [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
-        $retryAttempts = 0;
         $startTime = microtime(true);
 
         try {
-            $response = $this->executeStructuredRequest($newMessages, $prompt, $schema, $prompt->model, null, $retryAttempts);
+            $response = $this->executeStructuredRequest($newMessages, $prompt, $schema, $prompt->model, null);
             $durationMs = (microtime(true) - $startTime) * 1000;
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessagesWithTools');
@@ -396,9 +397,6 @@ class AiService
             $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $exception, $durationMs);
 
-            if (($retryAttempts ?? 0) > 0) {
-                throw new RetriesExhaustedException($retryAttempts, $exception);
-            }
             throw $exception;
         }
     }
@@ -493,9 +491,20 @@ class AiService
             $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
-        $stream = $builder->asStream();
-
         try {
+            // Resolve inside the try so a managed-provider misconfiguration is
+            // logged and dispatched, matching sendMessages/sendStructuredMessages.
+            $integration = $this->resolveIntegration($provider);
+
+            // Streaming bypasses the request executor — a Generator can't flow
+            // through its response wrapping/retry — but we still honour the
+            // circuit breaker so a known-down OpenRouter fails fast.
+            if ($integration !== null) {
+                (new CircuitBreaker($integration))->enforce();
+            }
+
+            $stream = $builder->asStream();
+
             foreach ($stream as $event) {
                 yield $event;
 
@@ -517,11 +526,14 @@ class AiService
     }
 
     /**
-     * Execute a structured Prism request with retry logic.
+     * Execute a structured Prism request through the OpenRouter integration.
      *
      * When $systemPrompt is non-null, it is applied to the request.
      * When null, no system prompt is set (used by sendStructuredMessagesWithTools
      * where the second step is purely "parse this text into JSON").
+     *
+     * Callers that already resolved the integration (e.g. to validate before a
+     * cache check) pass it in; when null it is resolved from the model.
      *
      * @param  Collection<int, Message>  $messages
      */
@@ -531,9 +543,8 @@ class AiService
         ObjectSchema $schema,
         string $modelIdentifier,
         ?string $systemPrompt = null,
-        ?int &$retryAttempts = null,
+        ?Integration $integration = null,
     ): StructuredResponse {
-        $retryAttempts = 0;
         [$provider, $model] = PromptData::parseModelIdentifier($modelIdentifier);
 
         $maxTokens = $this->maxTokens();
@@ -545,12 +556,7 @@ class AiService
             ->withSchema($schema)
             ->withMessages($messages->all())
             ->withMaxTokens($resolvedMaxTokens)
-            ->withClientOptions($clientOptions)
-            ->withClientRetry(
-                times: $this->retryTimes(),
-                sleepMilliseconds: $this->retrySleep($retryAttempts),
-                when: $this->retryWhen(),
-            );
+            ->withClientOptions($clientOptions);
 
         if ($systemPrompt !== null) {
             $builder = $builder->withSystemPrompt($systemPrompt);
@@ -561,9 +567,9 @@ class AiService
             $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
-        $response = $builder->asStructured();
+        $integration ??= $this->resolveIntegration($provider);
 
-        return $response;
+        return $this->requestStructured($integration, fn (): StructuredResponse => $builder->asStructured());
     }
 
     /**
@@ -637,120 +643,89 @@ class AiService
     }
 
     /**
-     * @return array{times: int, rate_limit_delay_ms: int, server_error_multiplier_ms: int, default_multiplier_ms: int, jitter: bool}
+     * The per-request max attempts handed to laravel-integrations. The
+     * framework owns the retry loop; OpenRouterProvider owns the backoff.
      */
-    private function retryConfig(): array
+    private function maxAttempts(): int
     {
-        $config = config('ai-workflow.retry');
-        if (! is_array($config)) {
-            return ['times' => 3, 'rate_limit_delay_ms' => 30_000, 'server_error_multiplier_ms' => 2_000, 'default_multiplier_ms' => 1_000, 'jitter' => true];
+        $times = config('ai-workflow.retry.times');
+
+        return is_int($times) && $times >= 1 ? $times : 3;
+    }
+
+    /**
+     * Resolve the Integration row for a provider key, or null when the provider
+     * isn't managed by laravel-integrations (those call Prism directly).
+     *
+     * Misconfigurations fail loudly rather than silently bypassing or
+     * mis-targeting the breaker: a registered provider with no row throws, and
+     * so does an ambiguous provider with more than one row.
+     */
+    private function resolveIntegration(string $provider): ?Integration
+    {
+        if (! app(IntegrationManager::class)->has($provider)) {
+            return null;
         }
 
-        return [
-            'times' => is_int($config['times'] ?? null) ? $config['times'] : 3,
-            'rate_limit_delay_ms' => is_int($config['rate_limit_delay_ms'] ?? null) ? $config['rate_limit_delay_ms'] : 30_000,
-            'server_error_multiplier_ms' => is_int($config['server_error_multiplier_ms'] ?? null) ? $config['server_error_multiplier_ms'] : 2_000,
-            'default_multiplier_ms' => is_int($config['default_multiplier_ms'] ?? null) ? $config['default_multiplier_ms'] : 1_000,
-            'jitter' => is_bool($config['jitter'] ?? null) ? $config['jitter'] : true,
-        ];
-    }
+        $integrations = Integration::query()->where('provider', $provider)->orderBy('id')->take(2)->get();
 
-    /**
-     * Get the configured retry count.
-     */
-    private function retryTimes(): int
-    {
-        return $this->retryConfig()['times'];
-    }
-
-    /**
-     * Build the retry sleep closure with optional jitter.
-     *
-     * @return Closure(int, Throwable): int
-     */
-    private function retrySleep(?int &$retryAttempts = null): Closure
-    {
-        $retryConfig = $this->retryConfig();
-
-        return function (int $attempt, Throwable $exception) use (&$retryAttempts, $retryConfig): int {
-            if ($retryAttempts !== null) {
-                $retryAttempts = $attempt;
-            }
-
-            $delay = $attempt * $retryConfig['default_multiplier_ms'];
-
-            if ($exception instanceof RequestException) {
-                $status = $exception->response->status();
-                if ($status === 429) {
-                    $delay = $retryConfig['rate_limit_delay_ms'];
-                } elseif ($status >= 500 && $status < 600) {
-                    $delay = $attempt * $retryConfig['server_error_multiplier_ms'];
-                }
-            } elseif ($exception instanceof PrismRateLimitedException) {
-                $delay = $exception->retryAfter !== null
-                    ? $exception->retryAfter * 1000
-                    : $retryConfig['rate_limit_delay_ms'];
-            } elseif ($exception instanceof PrismProviderOverloadedException || $exception instanceof PrismException) {
-                $delay = $attempt * $retryConfig['server_error_multiplier_ms'];
-            }
-
-            if ($retryConfig['jitter']) {
-                $delay = $this->applyJitter($delay);
-            }
-
-            return $delay;
-        };
-    }
-
-    /**
-     * Apply ±25% random jitter to a delay value.
-     */
-    private function applyJitter(int $delay): int
-    {
-        if ($delay <= 0) {
-            return 0;
+        if ($integrations->isEmpty()) {
+            throw new \RuntimeException(
+                "Provider '{$provider}' is registered with laravel-integrations but has no Integration row. Create one (e.g. `php artisan integrations:install {$provider}`) before making AI requests."
+            );
         }
 
-        $jitter = (int) ($delay * 0.25);
+        if ($integrations->count() > 1) {
+            throw new \RuntimeException(
+                "Multiple Integration rows exist for provider '{$provider}'; ai-workflow expects exactly one so the right credentials and circuit breaker are used. Remove the duplicates."
+            );
+        }
 
-        return max(0, $delay + random_int(-$jitter, $jitter));
+        return $integrations->first();
     }
 
     /**
-     * Build the retry condition closure.
+     * Run a Prism text call through the integration executor (breaker, retries,
+     * rate limiter, transport audit) when the provider is managed, otherwise
+     * call Prism directly. Narrows the executor's mixed return.
      *
-     * @return Closure(Throwable): bool
+     * @param  Closure(): Response  $call
      */
-    private function retryWhen(): Closure
+    private function requestText(?Integration $integration, Closure $call): Response
     {
-        return function (Throwable $exception): bool {
-            if ($exception instanceof ConnectionException) {
-                return true;
-            }
-            if ($exception instanceof RequestException) {
-                $status = $exception->response->status();
+        if ($integration === null) {
+            return $call();
+        }
 
-                return $status === 429 || ($status >= 500 && $status < 600);
-            }
+        $result = $integration->request(self::PROVIDER_ENDPOINT, 'POST', $call, maxAttempts: $this->maxAttempts());
 
-            // Prism wraps some provider errors (rate limits, overloaded, unknown
-            // finish reasons, 500s returned as 200+error body) into its own
-            // exception types that bypass HTTP-level retry. Retry these too.
-            if ($exception instanceof PrismRateLimitedException) {
-                return true;
-            }
-            if ($exception instanceof PrismProviderOverloadedException) {
-                return true;
-            }
-            if ($exception instanceof PrismStructuredDecodingException) {
-                return false;
-            }
-            if ($exception instanceof PrismException) {
-                return true;
-            }
+        if (! $result instanceof Response) {
+            throw new \LogicException('OpenRouter integration returned '.get_debug_type($result).', expected a Prism text Response.');
+        }
 
-            return false;
-        };
+        return $result;
+    }
+
+    /**
+     * Run a Prism structured call through the integration executor when the
+     * provider is managed, otherwise call Prism directly. Narrows the
+     * executor's mixed return.
+     *
+     * @param  Closure(): StructuredResponse  $call
+     */
+    private function requestStructured(?Integration $integration, Closure $call): StructuredResponse
+    {
+        if ($integration === null) {
+            return $call();
+        }
+
+        $result = $integration->request(self::PROVIDER_ENDPOINT, 'POST', $call, maxAttempts: $this->maxAttempts());
+
+        if (! $result instanceof StructuredResponse) {
+            throw new \LogicException('OpenRouter integration returned '.get_debug_type($result).', expected a Prism structured Response.');
+        }
+
+        return $result;
     }
 
     /**
@@ -840,28 +815,19 @@ class AiService
     }
 
     /**
-     * Extract HTTP status and response body from the exception chain, if any.
+     * Extract HTTP status and (sanitized) response body from the exception
+     * chain, if any.
      *
      * @return array{status: ?int, body: ?string}
      */
     private function extractHttpDetails(?Throwable $error): array
     {
-        for ($e = $error; $e !== null; $e = $e->getPrevious()) {
-            if ($e instanceof PrismException && ($e->httpStatus !== null || $e->responseBody !== null)) {
-                return [
-                    'status' => $e->httpStatus,
-                    'body' => $this->sanitizeResponseBody($e->responseBody),
-                ];
-            }
-            if ($e instanceof RequestException && $e->response !== null) {
-                return [
-                    'status' => $e->response->status(),
-                    'body' => $this->sanitizeResponseBody($e->response->body()),
-                ];
-            }
-        }
+        $details = PrismExceptionInspector::extract($error);
 
-        return ['status' => null, 'body' => null];
+        return [
+            'status' => $details['status'],
+            'body' => $this->sanitizeResponseBody($details['body']),
+        ];
     }
 
     /**

@@ -13,9 +13,11 @@ use AiWorkflow\Console\PromptTestCommand;
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Integrations\OpenRouterProvider;
 use AiWorkflow\Listeners\SentryBreadcrumbListener;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
+use Integrations\IntegrationManager;
 use Override;
 
 class AiWorkflowServiceProvider extends ServiceProvider
@@ -24,6 +26,10 @@ class AiWorkflowServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/ai-workflow.php', 'ai-workflow');
+
+        IntegrationManager::registerDefaults([
+            'openrouter' => OpenRouterProvider::class,
+        ]);
 
         $this->app->singleton(AiService::class);
         $this->app->singleton(PromptService::class);
