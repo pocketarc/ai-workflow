@@ -45,9 +45,20 @@ class EvalReport
         return $this->labelledCount < $this->requestCount;
     }
 
+    /**
+     * The top-accuracy model. Models are sorted best-first, but a fully
+     * unlabelled run has no accuracies at all, and "best agreement with human
+     * labels" would then be a claim with nothing behind it — so none is best.
+     */
     public function best(): ?EvalReportModelSummary
     {
-        return $this->models[0] ?? null;
+        foreach ($this->models as $model) {
+            if ($model->accuracy !== null) {
+                return $model;
+            }
+        }
+
+        return null;
     }
 
     /**

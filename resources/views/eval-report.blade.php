@@ -142,7 +142,7 @@
           <td>
             {{ $model->model }}
             @if($model->isBaseline)<span class="tag">baseline</span>@endif
-            @if($model->overlapsBaselineInterval === true)<span class="tag">not significant</span>@endif
+            @if($model->overlapsBaselineInterval === true)<span class="tag">CI overlaps baseline</span>@endif
           </td>
           <td>{{ $pct($model->accuracy) }}</td>
           <td class="note">
@@ -169,7 +169,8 @@
   <p class="note">
     Accuracy is exact agreement with the human-approved answer, with a Wilson 95% interval.
     “Blended” is the mean judge score, which may award partial credit. Models whose interval
-    overlaps the baseline’s are marked <em>not significant</em> — the set is too small to separate them.
+    overlaps the baseline’s are tagged <em>CI overlaps baseline</em> — a caution that the set
+    may be too small to separate them, not a paired significance test.
   </p>
 
   @foreach($report->models as $model)
@@ -271,7 +272,7 @@
       <li>Cohen's κ corrects for chance agreement; on a skewed label mix it is a fairer read than accuracy, and a majority-class guesser scores 0.</li>
       <li>Macro-F1 averages F1 across the classes that occur in the ground truth, so rare classes count as much as common ones.</li>
       <li>A model that returned no answer is counted as wrong and shown as <code>(no answer)</code>, never dropped from the denominator.</li>
-      <li>Scoring is deterministic rule matching, not an LLM judge, so there is no self-preference bias.</li>
+      <li>Accuracy, κ and F1 come from deterministic label matching, so they carry no self-preference bias; the blended score comes from the run's configured judge, which may itself be an LLM.</li>
     </ul>
   </footer>
 

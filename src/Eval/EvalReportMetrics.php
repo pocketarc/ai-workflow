@@ -7,6 +7,7 @@ namespace AiWorkflow\Eval;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use Illuminate\Support\Collection;
+use InvalidArgumentException;
 
 /**
  * Turns an eval run's raw scores into classification metrics.
@@ -95,7 +96,7 @@ class EvalReportMetrics
                 continue;
             }
 
-            $predicted = $score->predicted ?? self::NO_PREDICTION;
+            $predicted = $this->canonicalPrediction($score->predicted);
             $pairs[] = ['truth' => $truth, 'predicted' => $predicted];
 
             if ($truth === $predicted) {
@@ -127,6 +128,15 @@ class EvalReportMetrics
             medianLatencyMs: Statistics::percentile($latencies, 0.5),
             p95LatencyMs: Statistics::percentile($latencies, 0.95),
         );
+    }
+
+    /**
+     * The visible class name for a prediction. A model that answered nothing
+     * (null or empty) gets the NO_PREDICTION class rather than vanishing.
+     */
+    private function canonicalPrediction(?string $predicted): string
+    {
+        return $predicted === null || $predicted === '' ? self::NO_PREDICTION : $predicted;
     }
 
     /**
@@ -282,7 +292,15 @@ class EvalReportMetrics
      */
     private function resolveBaseline(AiWorkflowEvalRun $run, array $models, ?string $requested): ?string
     {
-        if ($requested !== null && in_array($requested, $models, true)) {
+        if ($requested !== null) {
+            // A typo here must not silently become a default comparison the
+            // user never asked for.
+            if (! in_array($requested, $models, true)) {
+                throw new InvalidArgumentException(
+                    "Baseline '{$requested}' is not part of this run. Models: ".implode(', ', $models),
+                );
+            }
+
             return $requested;
         }
 
@@ -306,10 +324,16 @@ class EvalReportMetrics
         $classes = [];
 
         foreach ($scores as $score) {
-            foreach ([$score->ground_truth, $score->predicted] as $label) {
-                if (is_string($label) && $label !== '') {
-                    $classes[$label] = true;
-                }
+            $truth = $score->ground_truth;
+
+            if (is_string($truth) && $truth !== '') {
+                $classes[$truth] = true;
+                // Labelled items land in the confusion matrix, so a missing
+                // prediction must surface here under the same name it has there
+                // — otherwise the matrix would drop its failure column.
+                $classes[$this->canonicalPrediction($score->predicted)] = true;
+            } elseif (is_string($score->predicted) && $score->predicted !== '') {
+                $classes[$score->predicted] = true;
             }
         }
 

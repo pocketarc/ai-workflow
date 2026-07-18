@@ -29,6 +29,7 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringNotContainsString('<script src=', $html);
         $this->assertStringNotContainsString('<link rel="stylesheet"', $html);
         $this->assertStringNotContainsString('http://', $html);
+        $this->assertStringNotContainsString('https://', $html);
     }
 
     public function test_it_shows_accuracy_and_the_baseline_delta(): void
@@ -43,8 +44,8 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringContainsString('baseline', $html);
         $this->assertStringContainsString('-25.0 pp', $html);
 
-        // Four samples cannot separate those, and the report says so.
-        $this->assertStringContainsString('not significant', $html);
+        // On four samples the Wilson intervals overlap, and the report flags it.
+        $this->assertStringContainsString('CI overlaps baseline', $html);
     }
 
     public function test_it_warns_when_a_model_mostly_failed(): void
@@ -135,6 +136,29 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringContainsString('Model comparison', File::get($path));
 
         File::delete($path);
+    }
+
+    public function test_the_default_report_path_includes_the_run_id(): void
+    {
+        // Two runs can share a name; the id keeps their reports apart.
+        $run = $this->seedRun();
+        $path = storage_path("app/eval/comparison-run-{$run->id}.html");
+
+        $this->artisan('eval:report', ['run' => $run->id])
+            ->assertSuccessful();
+
+        $this->assertTrue(File::exists($path));
+
+        File::delete($path);
+    }
+
+    public function test_the_command_rejects_an_unknown_baseline(): void
+    {
+        $run = $this->seedRun();
+
+        $this->artisan('eval:report', ['run' => $run->id, '--baseline' => 'openrouter:nope'])
+            ->expectsOutputToContain('not part of this run')
+            ->assertFailed();
     }
 
     public function test_the_command_resolves_a_run_by_name(): void

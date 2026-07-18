@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use LogicException;
 use Symfony\Component\HttpFoundation\InputBag;
 use Throwable;
 
@@ -34,7 +35,7 @@ class ReviewController
             // input is fetched per request from the `input` endpoint instead.
             // execution_id is needed by link resolvers, which use it to find
             // whatever record the host app filed this request under.
-            ->select(['id', 'execution_id', 'prompt_id', 'provider', 'model', 'structured_response', 'duration_ms', 'created_at'])
+            ->select(['id', 'execution_id', 'prompt_id', 'provider', 'model', 'response_text', 'structured_response', 'duration_ms', 'created_at'])
             ->with('annotations')
             ->successful()
             ->latest('id');
@@ -84,7 +85,11 @@ class ReviewController
         try {
             $resolver = app($configured);
 
-            return $resolver instanceof ReviewContextResolver ? $resolver->resolve($requests) : [];
+            if (! $resolver instanceof ReviewContextResolver) {
+                return [];
+            }
+
+            return $this->validatedContext($resolver->resolve($requests));
         } catch (Throwable $e) {
             report($e);
 
@@ -93,12 +98,37 @@ class ReviewController
     }
 
     /**
+     * The interface promises ReviewContext values keyed by request id, but the
+     * resolver is host-app code, and a wrong-shaped entry would only surface as
+     * a fatal in the view, outside the try/catch meant to keep context failures
+     * harmless. Throwing here instead lands the mistake in that catch, where it
+     * is reported and the page falls back to no context.
+     *
+     * @param  array<array-key, mixed>  $resolved
+     * @return array<int, ReviewContext>
+     */
+    private function validatedContext(array $resolved): array
+    {
+        $contexts = [];
+
+        foreach ($resolved as $id => $context) {
+            if (! is_int($id) || ! $context instanceof ReviewContext) {
+                throw new LogicException('Review context resolver returned '.get_debug_type($context).' keyed by '.get_debug_type($id).', expected ReviewContext instances keyed by request id.');
+            }
+
+            $contexts[$id] = $context;
+        }
+
+        return $contexts;
+    }
+
+    /**
      * The prompt text for a single request, fetched on demand so the list view
      * never has to hold every request's payload in memory at once.
      */
     public function input(AiWorkflowRequest $aiWorkflowRequest): HttpResponse
     {
-        $text = '';
+        $parts = [];
 
         foreach ($aiWorkflowRequest->messages as $message) {
             if (! is_array($message)) {
@@ -108,9 +138,13 @@ class ReviewController
             $content = $message['content'] ?? null;
 
             if (is_string($content) && $content !== '') {
-                $text = $content;
+                $parts[] = $content;
             }
         }
+
+        // The reviewer is judging what the model saw, and on a multi-turn
+        // request that includes the earlier messages, not just the last one.
+        $text = implode("\n\n", $parts);
 
         if ($text === '') {
             $text = '(no text content — the prompt may be entirely media)';

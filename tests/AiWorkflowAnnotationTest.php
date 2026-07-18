@@ -26,6 +26,7 @@ class AiWorkflowAnnotationTest extends DatabaseTestCase
         $this->assertSame(AnnotationVerdict::Up, $annotation->verdict);
         $this->assertSame('respond_to_customer', $annotation->label);
         $this->assertSame('Correct call.', $annotation->reason);
+        $this->assertSame('bruno', $annotation->reviewer);
         $this->assertTrue($request->is($annotation->request));
     }
 

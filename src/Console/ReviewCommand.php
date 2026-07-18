@@ -46,6 +46,13 @@ class ReviewCommand extends Command
         $host = $this->stringOption('host', '127.0.0.1');
         $port = $this->stringOption('port', '8099');
 
+        // --host exists because containers need a non-loopback bind for the
+        // host machine to reach the server. Anything wider than that deserves
+        // a heads-up: there is no authentication on these routes.
+        if (! in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
+            $this->warn("The review UI has no authentication. Binding to {$host} lets anyone who can reach it read every recorded prompt and write annotations.");
+        }
+
         // Run PHP's dev server directly rather than going through `artisan
         // serve`, which forwards only an allowlist of variables to the server it
         // starts. An app configured from its process environment — a container
@@ -58,8 +65,18 @@ class ReviewCommand extends Command
         $process = new Process(
             [PHP_BINARY, '-S', $host.':'.$port, '-t', public_path(), public_path('index.php')],
             base_path(),
-            // Keeps the routes dormant everywhere that has not asked for them.
-            [self::REVIEW_ENV => 'true'],
+            [
+                // Keeps the routes dormant everywhere that has not asked for them.
+                self::REVIEW_ENV => 'true',
+                // An optimised app would ignore that flag: a cached config froze
+                // review.enabled at whatever it was when config:cache ran, and
+                // cached routes skip loadRoutesFrom() entirely — the advertised
+                // URL would 404. Pointing both caches at files that do not exist
+                // makes the served app boot fresh, without touching the caches
+                // the deployed app keeps using.
+                'APP_CONFIG_CACHE' => storage_path('framework/cache/ai-workflow-review-no-config-cache.php'),
+                'APP_ROUTES_CACHE' => storage_path('framework/cache/ai-workflow-review-no-routes-cache.php'),
+            ],
         );
 
         // A review session lasts as long as the human needs.

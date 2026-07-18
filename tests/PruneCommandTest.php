@@ -12,6 +12,7 @@ use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
+use RuntimeException;
 
 class PruneCommandTest extends DatabaseTestCase
 {
@@ -124,6 +125,28 @@ class PruneCommandTest extends DatabaseTestCase
             ->assertSuccessful();
 
         $this->assertSame(0, AiWorkflowRequest::query()->count());
+    }
+
+    public function test_it_rejects_a_non_positive_retention_window(): void
+    {
+        // A negative window would put the cutoff in the future and delete
+        // recent requests, so it must stop the command instead.
+        config(['ai-workflow.pruning.requests_days' => -1]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Invalid ai-workflow.pruning.requests_days (-1): must be a positive integer.');
+
+        $this->artisan('ai-workflow:prune');
+    }
+
+    public function test_it_rejects_an_invalid_chunk_size(): void
+    {
+        config(['ai-workflow.pruning.chunk_size' => 0]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Invalid ai-workflow.pruning.chunk_size (0): must be a positive integer.');
+
+        $this->artisan('ai-workflow:prune');
     }
 
     public function test_the_retention_window_is_configurable(): void

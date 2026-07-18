@@ -65,6 +65,18 @@ class StatisticsTest extends BaseTestCase
         $this->assertEqualsWithDelta(1.0, $kappa, 0.0001);
     }
 
+    public function test_cohens_kappa_handles_a_homogeneous_label_set(): void
+    {
+        // A single label everywhere puts expected agreement at 1.0, which would
+        // divide by zero; perfect agreement must still read as 1.0.
+        $kappa = Statistics::cohensKappa([
+            ['truth' => 'wait', 'predicted' => 'wait'],
+            ['truth' => 'wait', 'predicted' => 'wait'],
+        ]);
+
+        $this->assertSame(1.0, $kappa);
+    }
+
     public function test_cohens_kappa_is_zero_at_chance_agreement(): void
     {
         // Truth is 50/50 and predictions are 50/50, agreeing exactly half the

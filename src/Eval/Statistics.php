@@ -137,9 +137,13 @@ class Statistics
     }
 
     /**
-     * Whether two confidence intervals overlap. Non-overlapping intervals are
-     * evidence of a real difference; overlapping ones are not, so a report
-     * should not rank models on a gap this test cannot separate.
+     * Whether two confidence intervals overlap.
+     *
+     * A coarse caution flag, not a significance test: model results are paired
+     * on the same requests, and paired estimates can differ reliably even while
+     * their marginal intervals overlap. Calling a difference significant would
+     * take a paired test such as McNemar's — overlap only says these intervals
+     * cannot separate the two on their own.
      *
      * @param  array{lower: float, upper: float}  $a
      * @param  array{lower: float, upper: float}  $b

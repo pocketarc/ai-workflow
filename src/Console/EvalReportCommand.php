@@ -9,6 +9,7 @@ use AiWorkflow\Models\AiWorkflowEvalRun;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 
 class EvalReportCommand extends Command
 {
@@ -35,11 +36,18 @@ class EvalReportCommand extends Command
         }
 
         $baseline = $this->option('baseline');
-        $html = $renderer->render(
-            $run,
-            is_string($baseline) && $baseline !== '' ? $baseline : null,
-            $maxDecisions,
-        );
+
+        try {
+            $html = $renderer->render(
+                $run,
+                is_string($baseline) && $baseline !== '' ? $baseline : null,
+                $maxDecisions,
+            );
+        } catch (InvalidArgumentException $e) {
+            $this->error($e->getMessage());
+
+            return self::FAILURE;
+        }
 
         $path = $this->resolveOutputPath($run);
         File::ensureDirectoryExists(dirname($path));
@@ -110,9 +118,9 @@ class EvalReportCommand extends Command
 
         $slug = Str::slug($run->name);
 
-        if ($slug === '') {
-            $slug = $run->id;
-        }
+        // Distinct runs can share a name; the id keeps their reports from
+        // overwriting each other.
+        $slug = $slug === '' ? $run->id : "{$slug}-{$run->id}";
 
         return storage_path("app/eval/{$slug}.html");
     }

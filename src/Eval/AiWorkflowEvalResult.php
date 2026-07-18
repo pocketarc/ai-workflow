@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Eval;
 
+use InvalidArgumentException;
+
 class AiWorkflowEvalResult
 {
     /**
@@ -18,5 +20,13 @@ class AiWorkflowEvalResult
         public readonly float $score,
         public readonly array $details = [],
         public readonly ?string $predicted = null,
-    ) {}
+    ) {
+        // Scores are persisted and averaged as they come, so an out-of-range
+        // (or NAN) score from a custom judge must fail here, not skew a run.
+        if (! is_finite($score) || $score < 0.0 || $score > 1.0) {
+            // var_export, because interpolating NAN into a string is itself a
+            // coercion error under strict error handling.
+            throw new InvalidArgumentException('Eval scores must be finite and between 0.0 and 1.0, got '.var_export($score, true).'.');
+        }
+    }
 }

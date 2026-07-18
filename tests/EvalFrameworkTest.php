@@ -11,6 +11,9 @@ use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use Illuminate\Database\Eloquent\JsonEncodingException;
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Structured\Response as StructuredResponse;
@@ -194,16 +197,24 @@ class EvalFrameworkTest extends DatabaseTestCase
 
         $requests = [$this->createTextRequest(), $this->createTextRequest(), $this->createTextRequest()];
 
+        $baseLevel = DB::connection()->transactionLevel();
+
         $seen = [];
-        $judge = new class($seen) implements AiWorkflowEvalJudge
+        $levels = [];
+        $judge = new class($seen, $levels) implements AiWorkflowEvalJudge
         {
-            /** @param  list<int>  $seen */
-            public function __construct(private array &$seen) {}
+            /**
+             * @param  list<int>  $seen
+             * @param  list<int>  $levels
+             */
+            public function __construct(private array &$seen, private array &$levels) {}
 
             public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
             {
-                // How many scores are already durable at this point.
+                // How many scores are already visible at this point, and
+                // whether the runner has opened a transaction of its own.
                 $this->seen[] = AiWorkflowEvalScore::query()->count();
+                $this->levels[] = DB::connection()->transactionLevel();
 
                 return new AiWorkflowEvalResult(1.0);
             }
@@ -216,8 +227,13 @@ class EvalFrameworkTest extends DatabaseTestCase
             judge: $judge,
         );
 
-        // Growing counts prove scores land one at a time, not in a final flush.
+        // Growing counts prove scores land one at a time, not in a final
+        // flush. Counts alone can't prove commits — this connection would see
+        // its own uncommitted rows through a run-wide transaction too — so the
+        // unchanged transaction level closes that gap: nothing between these
+        // writes and RefreshDatabase's wrapper holds them back.
         $this->assertSame([0, 1, 2], $seen);
+        $this->assertSame([$baseLevel, $baseLevel, $baseLevel], $levels);
         $this->assertSame(3, AiWorkflowEvalScore::query()->count());
     }
 
@@ -330,6 +346,51 @@ class EvalFrameworkTest extends DatabaseTestCase
         $scoreB = $evalRun->scores->where('model', 'openrouter:model-b')->first();
         $this->assertNotNull($scoreB);
         $this->assertEqualsWithDelta(0.8, (float) $scoreB->score, 0.0001);
+    }
+
+    public function test_eval_runner_surfaces_score_persistence_failures(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Good response')
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createTextRequest();
+
+        // INF can't be JSON-encoded, so persisting this (successful) result
+        // throws — a storage fault, not a replay/judge one.
+        $judge = $this->alwaysScoreJudge(1.0, ['confidence' => INF]);
+
+        try {
+            app(AiWorkflowEvalRunner::class)->run(
+                name: 'Persistence failure',
+                requests: [$request],
+                models: ['openrouter:model-a'],
+                judge: $judge,
+            );
+            $this->fail('Expected the persistence failure to surface.');
+        } catch (JsonEncodingException) {
+        }
+
+        // The failure surfaced instead of being rewritten as a zero-score
+        // "replay failed" row for a pair that actually succeeded.
+        $this->assertSame(0, AiWorkflowEvalScore::query()->count());
+    }
+
+    public function test_eval_result_enforces_the_score_range(): void
+    {
+        foreach ([-0.1, 1.1, NAN, INF, -INF] as $score) {
+            try {
+                new AiWorkflowEvalResult($score);
+                $this->fail("Expected score {$score} to be rejected.");
+            } catch (InvalidArgumentException) {
+            }
+        }
+
+        // The bounds themselves are valid scores.
+        $this->assertSame(0.0, (new AiWorkflowEvalResult(0.0))->score);
+        $this->assertSame(1.0, (new AiWorkflowEvalResult(1.0))->score);
     }
 
     public function test_eval_runner_with_custom_judge(): void

@@ -187,9 +187,11 @@ class OpenRouterProvider implements ClassifiesFailures, CustomizesRetry, Declare
             return ['rate_limit_delay_ms' => 30_000, 'server_error_multiplier_ms' => 2_000, 'jitter' => true];
         }
 
+        // Delays must be non-negative: a negative value would reach the
+        // framework's usleep() and crash the retry loop it was meant to pace.
         return [
-            'rate_limit_delay_ms' => is_int($config['rate_limit_delay_ms'] ?? null) ? $config['rate_limit_delay_ms'] : 30_000,
-            'server_error_multiplier_ms' => is_int($config['server_error_multiplier_ms'] ?? null) ? $config['server_error_multiplier_ms'] : 2_000,
+            'rate_limit_delay_ms' => is_int($config['rate_limit_delay_ms'] ?? null) && $config['rate_limit_delay_ms'] >= 0 ? $config['rate_limit_delay_ms'] : 30_000,
+            'server_error_multiplier_ms' => is_int($config['server_error_multiplier_ms'] ?? null) && $config['server_error_multiplier_ms'] >= 0 ? $config['server_error_multiplier_ms'] : 2_000,
             'jitter' => is_bool($config['jitter'] ?? null) ? $config['jitter'] : true,
         ];
     }

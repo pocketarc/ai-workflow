@@ -53,21 +53,6 @@ class AiWorkflowEvalRunner
                     $response = $this->replayer->replay($request, model: $model);
                     $durationMs = (int) ((hrtime(true) - $startedAt) / 1_000_000);
                     $result = $judge->judge($request, $response);
-
-                    AiWorkflowEvalScore::create([
-                        'eval_run_id' => $evalRun->id,
-                        'request_id' => $request->id,
-                        'model' => $model,
-                        'score' => $result->score,
-                        'details' => $result->details !== [] ? $result->details : null,
-                        'response_text' => $response instanceof StructuredResponse ? null : $response->text,
-                        'structured_response' => $response instanceof StructuredResponse ? $response->structured : null,
-                        'input_tokens' => $response->usage->promptTokens,
-                        'output_tokens' => $response->usage->completionTokens,
-                        'duration_ms' => $durationMs,
-                        'ground_truth' => $this->groundTruthFor($request),
-                        'predicted' => $result->predicted,
-                    ]);
                 } catch (Throwable $e) {
                     Log::warning('AiWorkflow: Eval replay/judge failed', [
                         'request_id' => $request->id,
@@ -83,7 +68,27 @@ class AiWorkflowEvalRunner
                         'details' => ['error' => $e->getMessage()],
                         'ground_truth' => $this->groundTruthFor($request),
                     ]);
+
+                    continue;
                 }
+
+                // Persisted outside the try: only replay/judge failures are a
+                // pair's own zero-score outcome. If saving a good (paid-for)
+                // result fails, that must surface, not be rewritten as one.
+                AiWorkflowEvalScore::create([
+                    'eval_run_id' => $evalRun->id,
+                    'request_id' => $request->id,
+                    'model' => $model,
+                    'score' => $result->score,
+                    'details' => $result->details !== [] ? $result->details : null,
+                    'response_text' => $response instanceof StructuredResponse ? null : $response->text,
+                    'structured_response' => $response instanceof StructuredResponse ? $response->structured : null,
+                    'input_tokens' => $response->usage->promptTokens,
+                    'output_tokens' => $response->usage->completionTokens,
+                    'duration_ms' => $durationMs,
+                    'ground_truth' => $this->groundTruthFor($request),
+                    'predicted' => $result->predicted,
+                ]);
             }
         }
 

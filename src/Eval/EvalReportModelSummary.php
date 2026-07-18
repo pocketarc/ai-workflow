@@ -52,15 +52,16 @@ class EvalReportModelSummary
     }
 
     /**
-     * What it costs to run a thousand decisions through this model.
+     * What it costs to run a thousand decisions through this model. Cost sums
+     * every replay, labelled or not, so the denominator is every replay too.
      */
     public function costPerThousand(): ?float
     {
-        if ($this->cost === null || $this->labelled === 0) {
+        if ($this->cost === null || $this->scored === 0) {
             return null;
         }
 
-        return ($this->cost / $this->labelled) * 1000;
+        return ($this->cost / $this->scored) * 1000;
     }
 
     /**

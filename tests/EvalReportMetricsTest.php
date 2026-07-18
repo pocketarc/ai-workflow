@@ -54,7 +54,8 @@ class EvalReportMetricsTest extends DatabaseTestCase
         $this->assertFalse($b->isBaseline);
         $this->assertEqualsWithDelta(-0.25, $b->accuracyDelta ?? 0.0, 0.0001);
 
-        // Four samples cannot separate 100% from 75%, so the report must say so.
+        // On four samples the Wilson intervals for 100% and 75% overlap, and
+        // the report has to surface that overlap.
         $this->assertTrue($b->overlapsBaselineInterval);
     }
 
@@ -99,8 +100,25 @@ class EvalReportMetricsTest extends DatabaseTestCase
         $this->assertEqualsWithDelta(0.5, $a->accuracy ?? 0.0, 0.0001);
         $this->assertSame(1, $a->errors);
 
-        // The failure is visible in the matrix rather than silently dropped.
+        // The failure is visible in the matrix rather than silently dropped...
         $this->assertSame(1, $a->confusion['respond'][EvalReportMetrics::NO_PREDICTION] ?? 0);
+
+        // ...and in the class list, or the rendered matrix would drop its column.
+        $this->assertContains(EvalReportMetrics::NO_PREDICTION, $report->classes);
+    }
+
+    public function test_best_is_null_when_nothing_is_labelled(): void
+    {
+        $run = AiWorkflowEvalRun::create(['name' => 'No labels', 'models' => ['openrouter:a']]);
+        $requests = $this->makeRequests(2);
+
+        $this->score($run, $requests[0], 'openrouter:a', null, 'respond', 1.0);
+        $this->score($run, $requests[1], 'openrouter:a', null, 'respond', 1.0);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+
+        // No labels means no accuracy, so no model can honestly be "best".
+        $this->assertNull($report->best());
     }
 
     public function test_it_costs_a_run_from_configured_pricing(): void
