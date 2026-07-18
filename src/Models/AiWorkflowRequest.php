@@ -45,6 +45,7 @@ use Override;
  * @property Carbon|null $updated_at
  * @property-read AiWorkflowExecution|null $execution
  * @property-read Collection<int, AiWorkflowAnnotation> $annotations
+ * @property-read Collection<int, AiWorkflowEvalScore> $evalScores
  *
  * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byModel(string $model)
  * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byPrompt(string $promptId)
@@ -137,5 +138,13 @@ class AiWorkflowRequest extends Model
     public function annotations(): HasMany
     {
         return $this->hasMany(AiWorkflowAnnotation::class, 'request_id');
+    }
+
+    /**
+     * @return HasMany<AiWorkflowEvalScore, $this>
+     */
+    public function evalScores(): HasMany
+    {
+        return $this->hasMany(AiWorkflowEvalScore::class, 'request_id');
     }
 }

@@ -46,6 +46,21 @@ return [
         'enabled' => env('AI_WORKFLOW_LOGGING', false),
     ],
 
+    // Retention applied by ai-workflow:prune. Requests the eval framework
+    // references — annotated, scored, or belonging to an execution in an eval
+    // dataset — are kept regardless of age; deleting them would cascade away
+    // labels and scores, or break dataset replays.
+    'pruning' => [
+        // Delete unreferenced ai_workflow_requests older than this many days.
+        // Also the age past which an execution with no remaining requests and
+        // no dataset membership is deleted.
+        'requests_days' => 90,
+
+        // Deleting in chunks avoids holding a table lock for the whole prune
+        // on a large backlog.
+        'chunk_size' => 1000,
+    ],
+
     // Response caching — opt-in per prompt via cache_ttl front-matter.
     'cache' => [
         'enabled' => env('AI_WORKFLOW_CACHE', false),

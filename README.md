@@ -264,6 +264,25 @@ Enable logging in your `.env`:
 AI_WORKFLOW_LOGGING=true
 ```
 
+### Pruning
+
+Logged requests carry full replay payloads, so the table grows quickly. Schedule `ai-workflow:prune` to delete requests older than the retention window, along with executions that are past the window, empty, and in no dataset:
+
+```php
+Schedule::command('ai-workflow:prune')->daily();
+```
+
+Requests the eval framework references are kept regardless of age: annotated requests, scored requests, and requests whose execution belongs to an eval dataset. Deleting them would cascade away labels and scores, or break dataset replays.
+
+Retention is configured in `config/ai-workflow.php`:
+
+```php
+'pruning' => [
+    'requests_days' => 90,
+    'chunk_size' => 1000,
+],
+```
+
 ### Execution Grouping
 
 Group related AI calls under a named execution:

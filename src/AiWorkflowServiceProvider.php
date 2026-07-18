@@ -11,6 +11,7 @@ use AiWorkflow\Console\EvalReportCommand;
 use AiWorkflow\Console\EvalRunCommand;
 use AiWorkflow\Console\EvalShowCommand;
 use AiWorkflow\Console\PromptTestCommand;
+use AiWorkflow\Console\PruneCommand;
 use AiWorkflow\Console\ReviewCommand;
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Eval\GoldenSetAssembler;
@@ -73,6 +74,7 @@ class AiWorkflowServiceProvider extends ServiceProvider
                 EvalRunCommand::class,
                 EvalShowCommand::class,
                 PromptTestCommand::class,
+                PruneCommand::class,
                 ReviewCommand::class,
             ]);
         }
