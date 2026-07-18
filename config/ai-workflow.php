@@ -54,4 +54,24 @@ return [
 
     // Middleware pipeline — global middleware applied to every AI request.
     'middleware' => [],
+
+    // Human review UI (ai-workflow:review). Off unless explicitly enabled, so
+    // the routes never answer in a deployed app; the command turns it on for
+    // the local server it starts.
+    'review' => [
+        'enabled' => env('AI_WORKFLOW_REVIEW', false),
+        'reviewer' => env('AI_WORKFLOW_REVIEWER'),
+        'per_page' => 20,
+
+        // Optional AiWorkflow\Eval\ReviewContextResolver implementation, adding
+        // links and situational notes to each reviewed request.
+        'context' => null,
+    ],
+
+    // Per-model pricing in USD per 1M tokens, keyed by provider:model. Used to
+    // cost eval runs. A model missing from this map is reported without a cost
+    // rather than guessed at, so the numbers are never quietly wrong.
+    'model_pricing' => [
+        // 'openrouter:anthropic/claude-opus-4.6' => ['input' => 5.00, 'output' => 25.00],
+    ],
 ];

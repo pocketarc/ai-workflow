@@ -154,6 +154,14 @@ class AiService
     }
 
     /**
+     * The execution currently grouping AI calls, if one is active.
+     */
+    public function currentExecution(): ?AiWorkflowExecution
+    {
+        return $this->currentExecution;
+    }
+
+    /**
      * End the current execution and return it.
      */
     public function endExecution(): ?AiWorkflowExecution

@@ -154,6 +154,73 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertSame(['intent' => 'billing'], $score->structured_response);
     }
 
+    public function test_eval_runner_records_replay_usage_and_latency(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withUsage(new Usage(15, 25))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $runner = app(AiWorkflowEvalRunner::class);
+        $evalRun = $runner->run(
+            name: 'Usage eval',
+            requests: [$request],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame(15, $score->input_tokens);
+        $this->assertSame(25, $score->output_tokens);
+        $this->assertNotNull($score->duration_ms);
+        $this->assertGreaterThanOrEqual(0, $score->duration_ms);
+    }
+
+    public function test_eval_runner_persists_each_score_as_it_goes(): void
+    {
+        // A real run is hours of paid API calls. If results only landed at the
+        // end, an interrupted run would throw away work already billed for — so
+        // each score must be written as soon as it exists.
+        Prism::fake([
+            TextResponseFake::make()->withText('one')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('two')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('three')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $requests = [$this->createTextRequest(), $this->createTextRequest(), $this->createTextRequest()];
+
+        $seen = [];
+        $judge = new class($seen) implements AiWorkflowEvalJudge
+        {
+            /** @param  list<int>  $seen */
+            public function __construct(private array &$seen) {}
+
+            public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
+            {
+                // How many scores are already durable at this point.
+                $this->seen[] = AiWorkflowEvalScore::query()->count();
+
+                return new AiWorkflowEvalResult(1.0);
+            }
+        };
+
+        app(AiWorkflowEvalRunner::class)->run(
+            name: 'Incremental',
+            requests: $requests,
+            models: ['openrouter:model-a'],
+            judge: $judge,
+        );
+
+        // Growing counts prove scores land one at a time, not in a final flush.
+        $this->assertSame([0, 1, 2], $seen);
+        $this->assertSame(3, AiWorkflowEvalScore::query()->count());
+    }
+
     public function test_eval_runner_with_multiple_requests(): void
     {
         Prism::fake([

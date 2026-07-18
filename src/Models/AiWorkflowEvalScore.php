@@ -18,10 +18,15 @@ use Override;
  * @property string $eval_run_id
  * @property int $request_id
  * @property string $model
- * @property float $score
+ * @property string $score The decimal cast returns a string; cast to float to compute with it.
  * @property array<string, mixed>|null $details
  * @property string|null $response_text
  * @property array<string, mixed>|null $structured_response
+ * @property int|null $input_tokens
+ * @property int|null $output_tokens
+ * @property int|null $duration_ms
+ * @property string|null $ground_truth
+ * @property string|null $predicted
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read AiWorkflowEvalRun $evalRun
@@ -41,6 +46,11 @@ class AiWorkflowEvalScore extends Model
         'details',
         'response_text',
         'structured_response',
+        'input_tokens',
+        'output_tokens',
+        'duration_ms',
+        'ground_truth',
+        'predicted',
     ];
 
     /**
@@ -53,6 +63,9 @@ class AiWorkflowEvalScore extends Model
             'score' => 'decimal:4',
             'details' => 'array',
             'structured_response' => 'array',
+            'input_tokens' => 'integer',
+            'output_tokens' => 'integer',
+            'duration_ms' => 'integer',
         ];
     }
 
