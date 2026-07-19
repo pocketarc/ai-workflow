@@ -48,6 +48,9 @@ class AiWorkflowEvalRunner
 
         foreach ($requests as $request) {
             foreach ($models as $model) {
+                $response = null;
+                $durationMs = null;
+
                 try {
                     $startedAt = hrtime(true);
                     $response = $this->replayer->replay($request, model: $model);
@@ -60,12 +63,20 @@ class AiWorkflowEvalRunner
                         'error' => $e->getMessage(),
                     ]);
 
+                    // When the judge failed after a successful replay, the
+                    // replay's tokens were still paid for: keep its usage on
+                    // the error row, or the cost report undercounts the run by
+                    // exactly the responses that were hardest to judge.
                     AiWorkflowEvalScore::create([
                         'eval_run_id' => $evalRun->id,
                         'request_id' => $request->id,
                         'model' => $model,
                         'score' => 0.0,
                         'details' => ['error' => $e->getMessage()],
+                        'input_tokens' => $response?->usage->promptTokens,
+                        'output_tokens' => $response?->usage->completionTokens,
+                        'thought_tokens' => $response?->usage->thoughtTokens,
+                        'duration_ms' => $durationMs,
                         'ground_truth' => $this->groundTruthFor($request),
                     ]);
 
