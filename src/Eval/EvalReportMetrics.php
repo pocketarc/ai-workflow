@@ -44,7 +44,7 @@ class EvalReportMetrics
             $summaries[] = $this->summarise((string) $model, $modelScores);
         }
 
-        $summaries = $this->applyBaselineComparison($summaries, $resolvedBaseline);
+        $summaries = $this->applyBaselineComparison($summaries, $resolvedBaseline, $this->correctnessByModel($scores));
         usort($summaries, fn (EvalReportModelSummary $a, EvalReportModelSummary $b): int => ($b->accuracy ?? -1.0) <=> ($a->accuracy ?? -1.0));
 
         $requestIds = $scores->pluck('request_id')->unique();
@@ -222,10 +222,36 @@ class EvalReportMetrics
     }
 
     /**
+     * Per-model map of request id to "was this labelled request answered
+     * correctly", used to pair each model against the baseline
+     * request-by-request for McNemar's test.
+     *
+     * @param  Collection<int, AiWorkflowEvalScore>  $scores
+     * @return array<string, array<int, bool>>
+     */
+    private function correctnessByModel(Collection $scores): array
+    {
+        $correctness = [];
+
+        foreach ($scores as $score) {
+            $truth = $score->ground_truth;
+
+            if ($truth === null || $truth === '') {
+                continue;
+            }
+
+            $correctness[$score->model][$score->request_id] = $truth === $this->canonicalPrediction($score->predicted);
+        }
+
+        return $correctness;
+    }
+
+    /**
      * @param  list<EvalReportModelSummary>  $summaries
+     * @param  array<string, array<int, bool>>  $correctness
      * @return list<EvalReportModelSummary>
      */
-    private function applyBaselineComparison(array $summaries, ?string $baseline): array
+    private function applyBaselineComparison(array $summaries, ?string $baseline, array $correctness): array
     {
         if ($baseline === null) {
             return $summaries;
@@ -244,12 +270,15 @@ class EvalReportMetrics
         }
 
         return array_map(
-            fn (EvalReportModelSummary $summary): EvalReportModelSummary => $this->compareToBaseline($summary, $baselineSummary),
+            fn (EvalReportModelSummary $summary): EvalReportModelSummary => $this->compareToBaseline($summary, $baselineSummary, $correctness),
             $summaries,
         );
     }
 
-    private function compareToBaseline(EvalReportModelSummary $summary, EvalReportModelSummary $baseline): EvalReportModelSummary
+    /**
+     * @param  array<string, array<int, bool>>  $correctness
+     */
+    private function compareToBaseline(EvalReportModelSummary $summary, EvalReportModelSummary $baseline, array $correctness): EvalReportModelSummary
     {
         $isBaseline = $summary->model === $baseline->model;
 
@@ -261,6 +290,20 @@ class EvalReportMetrics
         $overlaps = null;
         if (! $isBaseline && $summary->accuracyInterval !== null && $baseline->accuracyInterval !== null) {
             $overlaps = Statistics::intervalsOverlap($summary->accuracyInterval, $baseline->accuracyInterval);
+        }
+
+        $wins = null;
+        $losses = null;
+        $mcNemarP = null;
+        if (! $isBaseline) {
+            [$wins, $losses] = $this->discordantCounts(
+                $correctness[$summary->model] ?? [],
+                $correctness[$baseline->model] ?? [],
+            );
+
+            if ($wins !== null && $losses !== null) {
+                $mcNemarP = Statistics::mcNemarExactP($wins, $losses);
+            }
         }
 
         return new EvalReportModelSummary(
@@ -284,7 +327,42 @@ class EvalReportMetrics
             isBaseline: $isBaseline,
             accuracyDelta: $delta,
             overlapsBaselineInterval: $overlaps,
+            winsVsBaseline: $wins,
+            lossesVsBaseline: $losses,
+            mcNemarP: $mcNemarP,
         );
+    }
+
+    /**
+     * Discordant counts for McNemar's test: over the labelled requests both
+     * models answered, how often exactly one of them was right.
+     *
+     * @param  array<int, bool>  $model
+     * @param  array<int, bool>  $baseline
+     * @return array{int|null, int|null} [wins, losses]; nulls when the two
+     *                                   share no labelled requests.
+     */
+    private function discordantCounts(array $model, array $baseline): array
+    {
+        $paired = false;
+        $wins = 0;
+        $losses = 0;
+
+        foreach ($model as $requestId => $modelCorrect) {
+            if (! array_key_exists($requestId, $baseline)) {
+                continue;
+            }
+
+            $paired = true;
+
+            if ($modelCorrect && ! $baseline[$requestId]) {
+                $wins++;
+            } elseif (! $modelCorrect && $baseline[$requestId]) {
+                $losses++;
+            }
+        }
+
+        return $paired ? [$wins, $losses] : [null, null];
     }
 
     /**

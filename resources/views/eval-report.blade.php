@@ -127,6 +127,7 @@
         <th>Accuracy</th>
         <th>95% CI</th>
         <th>Δ vs baseline</th>
+        <th>p (McNemar)</th>
         <th>κ</th>
         <th>Macro-F1</th>
         <th>Blended</th>
@@ -155,6 +156,13 @@
               {{ $model->accuracyDelta > 0 ? '+' : '' }}{{ number_format($model->accuracyDelta * 100, 1) }} pp
             @endif
           </td>
+          <td class="note">
+            @if($model->mcNemarP !== null)
+              {{ $model->mcNemarP < 0.001 ? '<0.001' : $num($model->mcNemarP) }} ({{ $model->winsVsBaseline }}–{{ $model->lossesVsBaseline }})
+            @elseif($model->winsVsBaseline !== null)
+              — ({{ $model->winsVsBaseline }}–{{ $model->lossesVsBaseline }})
+            @else — @endif
+          </td>
           <td>{{ $num($model->kappa) }}</td>
           <td>{{ $num($model->macroF1) }}</td>
           <td>{{ $num($model->blendedScore) }}</td>
@@ -170,7 +178,10 @@
     Accuracy is exact agreement with the human-approved answer, with a Wilson 95% interval.
     “Blended” is the mean judge score, which may award partial credit. Models whose interval
     overlaps the baseline’s are tagged <em>CI overlaps baseline</em> — a caution that the set
-    may be too small to separate them, not a paired significance test.
+    may be too small to separate them, not a paired significance test. That test is
+    “p (McNemar)”: an exact binomial test over the requests exactly one of the pair got
+    right, shown in brackets as wins–losses against the baseline. Below 0.05 conventionally
+    counts as a real difference; a dash means the pair never disagreed.
   </p>
 
   @foreach($report->models as $model)

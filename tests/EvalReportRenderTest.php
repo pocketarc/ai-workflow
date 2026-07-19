@@ -46,6 +46,11 @@ class EvalReportRenderTest extends DatabaseTestCase
 
         // On four samples the Wilson intervals overlap, and the report flags it.
         $this->assertStringContainsString('CI overlaps baseline', $html);
+
+        // The paired test column: B lost its single disagreement with A, so
+        // the exact McNemar p is 1.000 over a 0–1 split.
+        $this->assertStringContainsString('p (McNemar)', $html);
+        $this->assertStringContainsString('1.000 (0–1)', $html);
     }
 
     public function test_it_warns_when_a_model_mostly_failed(): void

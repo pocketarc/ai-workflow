@@ -141,8 +141,8 @@ class Statistics
      *
      * A coarse caution flag, not a significance test: model results are paired
      * on the same requests, and paired estimates can differ reliably even while
-     * their marginal intervals overlap. Calling a difference significant would
-     * take a paired test such as McNemar's — overlap only says these intervals
+     * their marginal intervals overlap. Calling a difference significant takes
+     * a paired test — mcNemarExactP() — overlap only says these intervals
      * cannot separate the two on their own.
      *
      * @param  array{lower: float, upper: float}  $a
@@ -151,5 +151,42 @@ class Statistics
     public static function intervalsOverlap(array $a, array $b): bool
     {
         return $a['lower'] <= $b['upper'] && $b['lower'] <= $a['upper'];
+    }
+
+    /**
+     * Exact McNemar's test on paired right/wrong outcomes.
+     *
+     * Requests both models got right (or both wrong) say nothing about which is
+     * better, so the test uses only the discordant pairs: under the null
+     * hypothesis that the models are equally good, each discordant pair is a
+     * fair coin flip. Two-sided exact binomial p-value — golden sets are far
+     * too small for the chi-square approximation.
+     *
+     * @param  int  $wins  Requests this model got right and the other wrong.
+     * @param  int  $losses  The reverse.
+     * @return float|null Null when there are no discordant pairs to test.
+     */
+    public static function mcNemarExactP(int $wins, int $losses): ?float
+    {
+        $discordant = $wins + $losses;
+
+        if ($discordant === 0) {
+            return null;
+        }
+
+        // Sum the binomial pmf over the smaller tail iteratively:
+        // pmf(0) = 0.5^n, pmf(k+1) = pmf(k) * (n-k)/(k+1).
+        $k = min($wins, $losses);
+        $pmf = 0.5 ** $discordant;
+        $tail = $pmf;
+
+        for ($i = 0; $i < $k; $i++) {
+            $pmf *= ($discordant - $i) / ($i + 1);
+            $tail += $pmf;
+        }
+
+        // Two-sided: double the tail. An even split double-counts the central
+        // term, so cap at 1.
+        return min(1.0, 2.0 * $tail);
     }
 }

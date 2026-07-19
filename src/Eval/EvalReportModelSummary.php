@@ -17,6 +17,10 @@ class EvalReportModelSummary
      * @param  array<string, array{support: int, precision: float, recall: float, f1: float}>  $perClass
      * @param  array<string, array<string, int>>  $confusion  truth => predicted => count
      * @param  float|null  $cost  Total USD, or null when the model has no pricing configured.
+     * @param  int|null  $winsVsBaseline  Labelled requests this model got right and the baseline got wrong.
+     * @param  int|null  $lossesVsBaseline  The reverse: baseline right, this model wrong.
+     * @param  float|null  $mcNemarP  Exact McNemar p-value over the discordant pairs; null on the
+     *                                baseline row or when the pair share no labelled requests.
      */
     public function __construct(
         public readonly string $model,
@@ -39,6 +43,9 @@ class EvalReportModelSummary
         public readonly bool $isBaseline = false,
         public readonly ?float $accuracyDelta = null,
         public readonly ?bool $overlapsBaselineInterval = null,
+        public readonly ?int $winsVsBaseline = null,
+        public readonly ?int $lossesVsBaseline = null,
+        public readonly ?float $mcNemarP = null,
     ) {}
 
     /**

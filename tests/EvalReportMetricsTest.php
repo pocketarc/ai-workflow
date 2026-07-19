@@ -59,6 +59,26 @@ class EvalReportMetricsTest extends DatabaseTestCase
         $this->assertTrue($b->overlapsBaselineInterval);
     }
 
+    public function test_it_pairs_models_against_the_baseline_with_mcnemar(): void
+    {
+        $run = $this->seedRun();
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+
+        // The baseline is not compared against itself.
+        $a = $this->summaryFor($report->models, 'openrouter:a');
+        $this->assertNull($a->winsVsBaseline);
+        $this->assertNull($a->mcNemarP);
+
+        // B never beat A and lost one shared request: a single discordant
+        // pair, and 2 * P(X <= 0 | n = 1) = 1.0 — one disagreement proves
+        // nothing.
+        $b = $this->summaryFor($report->models, 'openrouter:b');
+        $this->assertSame(0, $b->winsVsBaseline);
+        $this->assertSame(1, $b->lossesVsBaseline);
+        $this->assertEqualsWithDelta(1.0, $b->mcNemarP ?? 0.0, 0.0001);
+    }
+
     public function test_it_builds_a_confusion_matrix_and_per_class_scores(): void
     {
         $run = $this->seedRun();

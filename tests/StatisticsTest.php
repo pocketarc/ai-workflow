@@ -171,4 +171,26 @@ class StatisticsTest extends BaseTestCase
             ['lower' => 0.80, 'upper' => 0.92],
         ));
     }
+
+    public function test_mcnemar_exact_p_matches_known_values(): void
+    {
+        // One model won all 8 disagreements: 2 * 0.5^8.
+        $this->assertEqualsWithDelta(0.0078125, Statistics::mcNemarExactP(8, 0) ?? 0.0, 1e-9);
+
+        // 2 wins against 8 losses: 2 * P(X <= 2 | n = 10) = 112/1024.
+        $this->assertEqualsWithDelta(0.109375, Statistics::mcNemarExactP(2, 8) ?? 0.0, 1e-9);
+
+        // Which side won is irrelevant to how surprising the split is.
+        $this->assertSame(Statistics::mcNemarExactP(2, 8), Statistics::mcNemarExactP(8, 2));
+    }
+
+    public function test_mcnemar_exact_p_handles_the_edges(): void
+    {
+        // Models that never disagreed give no evidence either way.
+        $this->assertNull(Statistics::mcNemarExactP(0, 0));
+
+        // An even split is the least surprising outcome; doubling its tail
+        // double-counts the central term, so the p-value caps at 1.
+        $this->assertSame(1.0, Statistics::mcNemarExactP(1, 1));
+    }
 }
