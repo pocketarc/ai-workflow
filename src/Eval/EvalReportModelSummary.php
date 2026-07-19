@@ -37,6 +37,7 @@ class EvalReportModelSummary
         public readonly array $confusion,
         public readonly int $inputTokens,
         public readonly int $outputTokens,
+        public readonly int $thoughtTokens,
         public readonly ?float $cost,
         public readonly ?float $medianLatencyMs,
         public readonly ?float $p95LatencyMs,

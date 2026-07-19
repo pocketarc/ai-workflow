@@ -184,6 +184,43 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertGreaterThanOrEqual(0, $score->duration_ms);
     }
 
+    public function test_a_judge_failure_still_persists_the_replay_usage(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withUsage(new Usage(15, 25, thoughtTokens: 5))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $judge = new class implements AiWorkflowEvalJudge
+        {
+            public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
+            {
+                throw new InvalidArgumentException('judge exploded');
+            }
+        };
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Judge failure eval',
+            requests: [$request],
+            models: ['openrouter:model-a'],
+            judge: $judge,
+        );
+
+        // The replay succeeded and was paid for; the judge failing must not
+        // erase the replay's usage from the cost accounting.
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame('judge exploded', $score->details['error'] ?? null);
+        $this->assertSame(15, $score->input_tokens);
+        $this->assertSame(25, $score->output_tokens);
+        $this->assertSame(5, $score->thought_tokens);
+        $this->assertNotNull($score->duration_ms);
+    }
+
     public function test_eval_runner_persists_each_score_as_it_goes(): void
     {
         // A real run is hours of paid API calls. If results only landed at the
