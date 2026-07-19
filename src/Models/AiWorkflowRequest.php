@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace AiWorkflow\Models;
 
 use AiWorkflow\Models\Builders\AiWorkflowRequestBuilder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Override;
@@ -42,6 +44,8 @@ use Override;
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read AiWorkflowExecution|null $execution
+ * @property-read Collection<int, AiWorkflowAnnotation> $annotations
+ * @property-read Collection<int, AiWorkflowEvalScore> $evalScores
  *
  * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byModel(string $model)
  * @method static AiWorkflowRequestBuilder<static>|AiWorkflowRequest byPrompt(string $promptId)
@@ -54,6 +58,14 @@ use Override;
  */
 class AiWorkflowRequest extends Model
 {
+    /**
+     * Transient attribute carrying the human-approved answer for this request
+     * during an eval run. Set in memory (never persisted) by the golden-set
+     * assembly so judges can score against the human label rather than
+     * re-deriving it from the recorded response.
+     */
+    public const string GROUND_TRUTH_ATTRIBUTE = 'eval_ground_truth';
+
     protected $table = 'ai_workflow_requests';
 
     protected $fillable = [
@@ -118,5 +130,21 @@ class AiWorkflowRequest extends Model
     public function execution(): BelongsTo
     {
         return $this->belongsTo(AiWorkflowExecution::class, 'execution_id');
+    }
+
+    /**
+     * @return HasMany<AiWorkflowAnnotation, $this>
+     */
+    public function annotations(): HasMany
+    {
+        return $this->hasMany(AiWorkflowAnnotation::class, 'request_id');
+    }
+
+    /**
+     * @return HasMany<AiWorkflowEvalScore, $this>
+     */
+    public function evalScores(): HasMany
+    {
+        return $this->hasMany(AiWorkflowEvalScore::class, 'request_id');
     }
 }

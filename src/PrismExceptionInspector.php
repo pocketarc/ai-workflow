@@ -20,23 +20,32 @@ use Throwable;
 final class PrismExceptionInspector
 {
     /**
-     * Walk the exception chain for the first carrier of HTTP context.
+     * Walk the exception chain, collecting status and body independently — the
+     * outermost carrier of each wins. A wrapper often has only one of the two
+     * (a body-only PrismException around a RequestException, say), and stopping
+     * at it would drop the status an inner exception still holds — turning a
+     * 402/403 into a status-less failure the classifier calls Upstream.
      *
      * @return array{status: ?int, body: ?string}
      */
     public static function extract(?Throwable $error): array
     {
-        for ($e = $error; $e !== null; $e = $e->getPrevious()) {
-            if ($e instanceof PrismException && ($e->httpStatus !== null || $e->responseBody !== null)) {
-                return ['status' => $e->httpStatus, 'body' => $e->responseBody];
+        $status = null;
+        $body = null;
+
+        for ($e = $error; $e !== null && ($status === null || $body === null); $e = $e->getPrevious()) {
+            if ($e instanceof PrismException) {
+                $status ??= $e->httpStatus;
+                $body ??= $e->responseBody;
             }
 
             if ($e instanceof RequestException && $e->response !== null) {
-                return ['status' => $e->response->status(), 'body' => $e->response->body()];
+                $status ??= $e->response->status();
+                $body ??= $e->response->body();
             }
         }
 
-        return ['status' => null, 'body' => null];
+        return ['status' => $status, 'body' => $body];
     }
 
     public static function httpStatus(?Throwable $error): ?int

@@ -10,13 +10,17 @@ use AiWorkflow\Integrations\OpenRouterProvider;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use Generator;
 use Illuminate\Support\Facades\Event;
+use Integrations\Enums\FailureClass;
 use Integrations\Models\Integration;
+use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Enums\Provider as ProviderEnum;
 use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\PrismManager;
 use Prism\Prism\Providers\Provider;
+use Prism\Prism\Streaming\Events\StreamStartEvent;
 use Prism\Prism\Testing\PrismFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Request as TextRequest;
@@ -201,6 +205,74 @@ class IntegrationRoutingTest extends DatabaseTestCase
         $this->assertNotNull($request);
         $this->assertStringContainsString('Multiple Integration rows exist', (string) $request->error);
         Event::assertDispatched(AiWorkflowRequestFailed::class);
+    }
+
+    public function test_stream_failure_counts_toward_breaker_and_health(): void
+    {
+        $exception = PrismException::providerResponseError(
+            'OpenRouter: upstream unavailable',
+            httpStatus: 503,
+            responseBody: '{"error":"unavailable"}',
+        );
+
+        $fake = new class($exception) extends PrismFake
+        {
+            public function __construct(private readonly Throwable $exception)
+            {
+                parent::__construct([]);
+            }
+
+            public function stream(TextRequest $request): Generator
+            {
+                yield new StreamStartEvent(
+                    id: 'fake',
+                    timestamp: time(),
+                    model: 'test-model',
+                    provider: 'fake',
+                );
+
+                throw $this->exception;
+            }
+        };
+
+        app()->instance(PrismManager::class, new class($fake) extends PrismManager
+        {
+            public function __construct(private readonly PrismFake $fake) {}
+
+            public function resolve(ProviderEnum|string $name, array $providerConfig = []): Provider
+            {
+                return $this->fake;
+            }
+        });
+
+        try {
+            foreach (app(AiService::class)->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+                // Drain until the fake throws mid-stream.
+            }
+            $this->fail('Expected the 503 to surface.');
+        } catch (PrismException $e) {
+            $this->assertSame(503, $e->httpStatus);
+        }
+
+        // Streaming bypasses the executor, so the service itself must feed
+        // the outcome into the shared health/breaker accounting.
+        $this->assertSame(1, $this->openRouterIntegration()->consecutive_failures);
+    }
+
+    public function test_stream_success_resets_health(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Streamed')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $this->openRouterIntegration()->recordFailure(FailureClass::Upstream);
+        $this->assertSame(1, $this->openRouterIntegration()->consecutive_failures);
+
+        foreach (app(AiService::class)->streamMessages(collect([new UserMessage('Hello')]), $this->makePrompt()) as $event) {
+            // Drain to completion.
+        }
+
+        $this->assertSame(0, $this->openRouterIntegration()->consecutive_failures);
     }
 
     public function test_cache_hit_still_validates_the_managed_integration(): void

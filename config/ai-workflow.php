@@ -46,6 +46,21 @@ return [
         'enabled' => env('AI_WORKFLOW_LOGGING', false),
     ],
 
+    // Retention applied by ai-workflow:prune. Requests the eval framework
+    // references — annotated, scored, or belonging to an execution in an eval
+    // dataset — are kept regardless of age; deleting them would cascade away
+    // labels and scores, or break dataset replays.
+    'pruning' => [
+        // Delete unreferenced ai_workflow_requests older than this many days.
+        // Also the age past which an execution with no remaining requests and
+        // no dataset membership is deleted.
+        'requests_days' => 90,
+
+        // Deleting in chunks avoids holding a table lock for the whole prune
+        // on a large backlog.
+        'chunk_size' => 1000,
+    ],
+
     // Response caching — opt-in per prompt via cache_ttl front-matter.
     'cache' => [
         'enabled' => env('AI_WORKFLOW_CACHE', false),
@@ -54,4 +69,24 @@ return [
 
     // Middleware pipeline — global middleware applied to every AI request.
     'middleware' => [],
+
+    // Human review UI (ai-workflow:review). Off unless explicitly enabled, so
+    // the routes never answer in a deployed app; the command turns it on for
+    // the local server it starts.
+    'review' => [
+        'enabled' => env('AI_WORKFLOW_REVIEW', false),
+        'reviewer' => env('AI_WORKFLOW_REVIEWER'),
+        'per_page' => 20,
+
+        // Optional AiWorkflow\Eval\ReviewContextResolver implementation, adding
+        // links and situational notes to each reviewed request.
+        'context' => null,
+    ],
+
+    // Per-model pricing in USD per 1M tokens, keyed by provider:model. Used to
+    // cost eval runs. A model missing from this map is reported without a cost
+    // rather than guessed at, so the numbers are never quietly wrong.
+    'model_pricing' => [
+        // 'openrouter:anthropic/claude-opus-4.6' => ['input' => 5.00, 'output' => 25.00],
+    ],
 ];

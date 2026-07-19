@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Log;
 use Integrations\CircuitBreaker;
 use Integrations\IntegrationManager;
 use Integrations\Models\Integration;
+use Integrations\Support\FailureClassifier;
 use Prism\Prism\Contracts\Message;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Exceptions\PrismException;
@@ -151,6 +152,14 @@ class AiService
                 'metadata' => $metadata !== [] ? $metadata : null,
             ]);
         }
+    }
+
+    /**
+     * The execution currently grouping AI calls, if one is active.
+     */
+    public function currentExecution(): ?AiWorkflowExecution
+    {
+        return $this->currentExecution;
     }
 
     /**
@@ -491,6 +500,10 @@ class AiService
             $builder = $builder->withProviderOptions($reasoningOptions);
         }
 
+        $integration = null;
+        $breaker = null;
+        $streamBegan = false;
+
         try {
             // Resolve inside the try so a managed-provider misconfiguration is
             // logged and dispatched, matching sendMessages/sendStructuredMessages.
@@ -500,8 +513,13 @@ class AiService
             // through its response wrapping/retry — but we still honour the
             // circuit breaker so a known-down OpenRouter fails fast.
             if ($integration !== null) {
-                (new CircuitBreaker($integration))->enforce();
+                $breaker = new CircuitBreaker($integration);
+                $breaker->enforce();
             }
+
+            // Failures past this point are the stream's own outcome; a breaker
+            // rejection above is not evidence about OpenRouter's health.
+            $streamBegan = true;
 
             $stream = $builder->asStream();
 
@@ -516,7 +534,20 @@ class AiService
                     $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $event->finishReason, $event->usage ?? new Usage(0, 0), $durationMs);
                 }
             }
+
+            // The executor normally settles breaker and health after each
+            // request; streaming bypassed it, so settle them here — otherwise a
+            // stream claiming the half-open probe slot would leave the circuit
+            // stuck until the slot's TTL expires.
+            $breaker?->recordSuccess();
+            $integration?->recordSuccess();
         } catch (Throwable $exception) {
+            if ($streamBegan && $integration !== null && $breaker !== null) {
+                $failureClass = FailureClassifier::classify($exception, $integration->provider());
+                $breaker->recordFailure($failureClass);
+                $integration->recordFailure($failureClass);
+            }
+
             $durationMs = (microtime(true) - $startTime) * 1000;
             $this->logRequest($prompt, 'streamMessages', $provider, $model, $systemPrompt, $messages->all(), $durationMs, error: $exception);
             $this->dispatchFailedEvent($prompt, 'streamMessages', $model, $exception, $durationMs);

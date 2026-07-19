@@ -11,6 +11,9 @@ use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use Illuminate\Database\Eloquent\JsonEncodingException;
+use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Structured\Response as StructuredResponse;
@@ -154,6 +157,86 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertSame(['intent' => 'billing'], $score->structured_response);
     }
 
+    public function test_eval_runner_records_replay_usage_and_latency(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withUsage(new Usage(15, 25))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $runner = app(AiWorkflowEvalRunner::class);
+        $evalRun = $runner->run(
+            name: 'Usage eval',
+            requests: [$request],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame(15, $score->input_tokens);
+        $this->assertSame(25, $score->output_tokens);
+        $this->assertNotNull($score->duration_ms);
+        $this->assertGreaterThanOrEqual(0, $score->duration_ms);
+    }
+
+    public function test_eval_runner_persists_each_score_as_it_goes(): void
+    {
+        // A real run is hours of paid API calls. If results only landed at the
+        // end, an interrupted run would throw away work already billed for — so
+        // each score must be written as soon as it exists.
+        Prism::fake([
+            TextResponseFake::make()->withText('one')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('two')->withFinishReason(FinishReason::Stop),
+            TextResponseFake::make()->withText('three')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $requests = [$this->createTextRequest(), $this->createTextRequest(), $this->createTextRequest()];
+
+        $baseLevel = DB::connection()->transactionLevel();
+
+        $seen = [];
+        $levels = [];
+        $judge = new class($seen, $levels) implements AiWorkflowEvalJudge
+        {
+            /**
+             * @param  list<int>  $seen
+             * @param  list<int>  $levels
+             */
+            public function __construct(private array &$seen, private array &$levels) {}
+
+            public function judge(AiWorkflowRequest $originalRequest, Response|StructuredResponse $response): AiWorkflowEvalResult
+            {
+                // How many scores are already visible at this point, and
+                // whether the runner has opened a transaction of its own.
+                $this->seen[] = AiWorkflowEvalScore::query()->count();
+                $this->levels[] = DB::connection()->transactionLevel();
+
+                return new AiWorkflowEvalResult(1.0);
+            }
+        };
+
+        app(AiWorkflowEvalRunner::class)->run(
+            name: 'Incremental',
+            requests: $requests,
+            models: ['openrouter:model-a'],
+            judge: $judge,
+        );
+
+        // Growing counts prove scores land one at a time, not in a final
+        // flush. Counts alone can't prove commits — this connection would see
+        // its own uncommitted rows through a run-wide transaction too — so the
+        // unchanged transaction level closes that gap: nothing between these
+        // writes and RefreshDatabase's wrapper holds them back.
+        $this->assertSame([0, 1, 2], $seen);
+        $this->assertSame([$baseLevel, $baseLevel, $baseLevel], $levels);
+        $this->assertSame(3, AiWorkflowEvalScore::query()->count());
+    }
+
     public function test_eval_runner_with_multiple_requests(): void
     {
         Prism::fake([
@@ -263,6 +346,51 @@ class EvalFrameworkTest extends DatabaseTestCase
         $scoreB = $evalRun->scores->where('model', 'openrouter:model-b')->first();
         $this->assertNotNull($scoreB);
         $this->assertEqualsWithDelta(0.8, (float) $scoreB->score, 0.0001);
+    }
+
+    public function test_eval_runner_surfaces_score_persistence_failures(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Good response')
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createTextRequest();
+
+        // INF can't be JSON-encoded, so persisting this (successful) result
+        // throws — a storage fault, not a replay/judge one.
+        $judge = $this->alwaysScoreJudge(1.0, ['confidence' => INF]);
+
+        try {
+            app(AiWorkflowEvalRunner::class)->run(
+                name: 'Persistence failure',
+                requests: [$request],
+                models: ['openrouter:model-a'],
+                judge: $judge,
+            );
+            $this->fail('Expected the persistence failure to surface.');
+        } catch (JsonEncodingException) {
+        }
+
+        // The failure surfaced instead of being rewritten as a zero-score
+        // "replay failed" row for a pair that actually succeeded.
+        $this->assertSame(0, AiWorkflowEvalScore::query()->count());
+    }
+
+    public function test_eval_result_enforces_the_score_range(): void
+    {
+        foreach ([-0.1, 1.1, NAN, INF, -INF] as $score) {
+            try {
+                new AiWorkflowEvalResult($score);
+                $this->fail("Expected score {$score} to be rejected.");
+            } catch (InvalidArgumentException) {
+            }
+        }
+
+        // The bounds themselves are valid scores.
+        $this->assertSame(0.0, (new AiWorkflowEvalResult(0.0))->score);
+        $this->assertSame(1.0, (new AiWorkflowEvalResult(1.0))->score);
     }
 
     public function test_eval_runner_with_custom_judge(): void

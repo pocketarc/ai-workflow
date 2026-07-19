@@ -6,6 +6,7 @@ namespace AiWorkflow\Tests;
 
 use AiWorkflow\Integrations\OpenRouterCredentials;
 use AiWorkflow\Integrations\OpenRouterProvider;
+use AiWorkflow\PrismExceptionInspector;
 use Illuminate\Http\Client\ConnectionException;
 use Integrations\Contracts\ClassifiesFailures;
 use Integrations\Contracts\CustomizesRetry;
@@ -85,6 +86,24 @@ class OpenRouterProviderTest extends TestCase
         $this->assertSame(FailureClass::Upstream, $provider->classifyFailure(new PrismException('OpenRouter: unknown error')));
     }
 
+    public function test_status_is_read_through_a_body_only_wrapper(): void
+    {
+        // Prism sometimes rethrows with only the body attached while an inner
+        // exception still carries the status. Dropping it here would turn a
+        // billing 402 into a retryable Upstream fault.
+        $inner = new PrismException('payment required');
+        $inner->httpStatus = 402;
+
+        $outer = new PrismException('OpenRouter request failed', previous: $inner);
+        $outer->responseBody = '{"error":{"message":"insufficient credits"}}';
+
+        $this->assertSame(
+            ['status' => 402, 'body' => '{"error":{"message":"insufficient credits"}}'],
+            PrismExceptionInspector::extract($outer),
+        );
+        $this->assertSame(FailureClass::Client, (new OpenRouterProvider)->classifyFailure($outer));
+    }
+
     public function test_structured_decoding_defers_so_fallback_handles_it(): void
     {
         $provider = new OpenRouterProvider;
@@ -146,6 +165,18 @@ class OpenRouterProviderTest extends TestCase
         $provider = new OpenRouterProvider;
 
         $this->assertNull($provider->retryDelayMs($this->providerResponse('bad', 400), 1, null));
+    }
+
+    public function test_negative_retry_delays_fall_back_to_defaults(): void
+    {
+        config()->set('ai-workflow.retry.jitter', false);
+        config()->set('ai-workflow.retry.rate_limit_delay_ms', -5_000);
+        config()->set('ai-workflow.retry.server_error_multiplier_ms', -1_000);
+
+        $provider = new OpenRouterProvider;
+
+        $this->assertSame(30_000, $provider->retryDelayMs($this->providerResponse('slow', 429), 1, null));
+        $this->assertSame(2_000, $provider->retryDelayMs($this->providerResponse('boom', 500), 1, null));
     }
 
     public function test_retry_delay_applies_jitter(): void
