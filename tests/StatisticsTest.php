@@ -192,5 +192,9 @@ class StatisticsTest extends BaseTestCase
         // An even split is the least surprising outcome; doubling its tail
         // double-counts the central term, so the p-value caps at 1.
         $this->assertSame(1.0, Statistics::mcNemarExactP(1, 1));
+
+        // A plain 0.5^n underflows around a thousand disagreements and would
+        // report a hard zero here instead of the honest "no difference".
+        $this->assertSame(1.0, Statistics::mcNemarExactP(1000, 1000));
     }
 }

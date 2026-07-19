@@ -20,4 +20,11 @@ class ReviewCommandTest extends TestCase
             ->expectsOutputToContain('http://[::1]:8099/ai-workflow/review')
             ->assertSuccessful();
     }
+
+    public function test_an_already_bracketed_ipv6_host_is_not_double_bracketed(): void
+    {
+        $this->artisan('ai-workflow:review', ['--host' => '[::1]'])
+            ->expectsOutputToContain('http://[::1]:8099/ai-workflow/review')
+            ->assertSuccessful();
+    }
 }

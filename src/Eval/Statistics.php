@@ -174,15 +174,18 @@ class Statistics
             return null;
         }
 
-        // Sum the binomial pmf over the smaller tail iteratively:
-        // pmf(0) = 0.5^n, pmf(k+1) = pmf(k) * (n-k)/(k+1).
-        $k = min($wins, $losses);
-        $pmf = 0.5 ** $discordant;
-        $tail = $pmf;
+        // Sum the binomial pmf over the smaller tail, walking the recurrence
+        // pmf(k+1) = pmf(k) * (n-k)/(k+1) in log space: 0.5^n underflows a
+        // plain float around a thousand disagreements, which would report a
+        // hard zero even for a balanced split. Individual terms too small for
+        // a float add nothing, which matches their contribution.
+        $smallerCount = min($wins, $losses);
+        $logPmf = $discordant * log(0.5);
+        $tail = exp($logPmf);
 
-        for ($i = 0; $i < $k; $i++) {
-            $pmf *= ($discordant - $i) / ($i + 1);
-            $tail += $pmf;
+        for ($i = 0; $i < $smallerCount; $i++) {
+            $logPmf += log(($discordant - $i) / ($i + 1));
+            $tail += exp($logPmf);
         }
 
         // Two-sided: double the tail. An even split double-counts the central

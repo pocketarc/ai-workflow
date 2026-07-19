@@ -180,8 +180,9 @@
     overlaps the baseline’s are tagged <em>CI overlaps baseline</em> — a caution that the set
     may be too small to separate them, not a paired significance test. That test is
     “p (McNemar)”: an exact binomial test over the requests exactly one of the pair got
-    right, shown in brackets as wins–losses against the baseline. Below 0.05 conventionally
-    counts as a real difference; a dash means the pair never disagreed.
+    right, shown in brackets as wins–losses against the baseline. Below 0.05 is
+    conventionally read as evidence against equal accuracy for that pair — the values are
+    unadjusted for comparing several models at once. A dash means the pair never disagreed.
   </p>
 
   @foreach($report->models as $model)

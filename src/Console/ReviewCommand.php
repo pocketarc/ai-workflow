@@ -112,10 +112,12 @@ class ReviewCommand extends Command
 
     /**
      * IPv6 hosts need brackets before a port can be appended — `::1:8099`
-     * parses as neither a bind address nor a URL host.
+     * parses as neither a bind address nor a URL host. Stripping first keeps a
+     * host the caller already bracketed from gaining a second pair.
      */
     private function address(string $host, string $port): string
     {
+        $host = trim($host, '[]');
         $host = str_contains($host, ':') ? "[{$host}]" : $host;
 
         return "{$host}:{$port}";
