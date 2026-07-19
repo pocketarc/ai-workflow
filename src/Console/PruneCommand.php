@@ -11,6 +11,7 @@ use AiWorkflow\Models\Builders\AiWorkflowExecutionBuilder;
 use AiWorkflow\Models\Builders\AiWorkflowRequestBuilder;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 class PruneCommand extends Command
@@ -66,21 +67,30 @@ class PruneCommand extends Command
         $totalDeleted = 0;
 
         do {
-            $ids = $this->prunableRequests($cutoff)
-                ->limit($chunkSize)
-                ->pluck('id');
+            // One transaction per batch, with the candidate rows locked before
+            // the delete. A concurrent annotation or score insert blocks on its
+            // foreign-key check against our row lock until the batch commits —
+            // it cannot land between selection and delete and be cascaded away.
+            [$picked, $deleted] = DB::transaction(function () use ($cutoff, $chunkSize): array {
+                $ids = $this->prunableRequests($cutoff)
+                    ->orderBy('id')
+                    ->limit($chunkSize)
+                    ->lockForUpdate()
+                    ->pluck('id');
 
-            if ($ids->isEmpty()) {
-                break;
-            }
+                if ($ids->isEmpty()) {
+                    return [0, 0];
+                }
 
-            // The delete re-applies the guards rather than trusting the ids: a
-            // request picked by the pluck could gain an annotation or score
-            // before the delete runs, and the cascade would silently take that
-            // fresh eval data with it.
-            $deleted = $this->prunableRequests($cutoff)->whereIn('id', $ids)->delete();
-            $totalDeleted += is_int($deleted) ? $deleted : 0;
-        } while ($ids->count() >= $chunkSize);
+                // The delete still re-applies the guards rather than trusting
+                // the ids, as a backstop for anything the locks let through.
+                $deleted = $this->prunableRequests($cutoff)->whereIn('id', $ids)->delete();
+
+                return [$ids->count(), is_int($deleted) ? $deleted : 0];
+            });
+
+            $totalDeleted += $deleted;
+        } while ($picked >= $chunkSize);
 
         return $totalDeleted;
     }
@@ -111,20 +121,27 @@ class PruneCommand extends Command
         $totalDeleted = 0;
 
         do {
-            $ids = $this->prunableExecutions($cutoff)
-                ->limit($chunkSize)
-                ->pluck('id');
+            // Same batch shape as the requests: lock, re-check, delete. Here
+            // the lock holds off concurrent request or dataset-entry inserts
+            // pointing at an execution mid-delete.
+            [$picked, $deleted] = DB::transaction(function () use ($cutoff, $chunkSize): array {
+                $ids = $this->prunableExecutions($cutoff)
+                    ->orderBy('id')
+                    ->limit($chunkSize)
+                    ->lockForUpdate()
+                    ->pluck('id');
 
-            if ($ids->isEmpty()) {
-                break;
-            }
+                if ($ids->isEmpty()) {
+                    return [0, 0];
+                }
 
-            // Same re-check as the request delete: an execution picked by the
-            // pluck could gain a request or a dataset entry before the delete
-            // runs.
-            $deleted = $this->prunableExecutions($cutoff)->whereIn('id', $ids)->delete();
-            $totalDeleted += is_int($deleted) ? $deleted : 0;
-        } while ($ids->count() >= $chunkSize);
+                $deleted = $this->prunableExecutions($cutoff)->whereIn('id', $ids)->delete();
+
+                return [$ids->count(), is_int($deleted) ? $deleted : 0];
+            });
+
+            $totalDeleted += $deleted;
+        } while ($picked >= $chunkSize);
 
         return $totalDeleted;
     }

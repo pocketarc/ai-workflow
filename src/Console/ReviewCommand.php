@@ -63,7 +63,7 @@ class ReviewCommand extends Command
         // index.php doubles as the router: this UI ships no static assets, so
         // routing every request through the app is fine.
         $process = new Process(
-            [PHP_BINARY, '-S', $host.':'.$port, '-t', public_path(), public_path('index.php')],
+            [PHP_BINARY, '-S', $this->address($host, $port), '-t', public_path(), public_path('index.php')],
             base_path(),
             [
                 // Keeps the routes dormant everywhere that has not asked for them.
@@ -105,9 +105,20 @@ class ReviewCommand extends Command
             $query['all'] = '1';
         }
 
-        $url = "http://{$host}:{$port}/ai-workflow/review";
+        $url = 'http://'.$this->address($host, $port).'/ai-workflow/review';
 
         return $query === [] ? $url : $url.'?'.http_build_query($query);
+    }
+
+    /**
+     * IPv6 hosts need brackets before a port can be appended — `::1:8099`
+     * parses as neither a bind address nor a URL host.
+     */
+    private function address(string $host, string $port): string
+    {
+        $host = str_contains($host, ':') ? "[{$host}]" : $host;
+
+        return "{$host}:{$port}";
     }
 
     private function stringOption(string $name, string $default): string
