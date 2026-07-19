@@ -189,7 +189,7 @@
     <h2>{{ $model->model }}</h2>
     <p class="sub">
       {{ $model->correct }}/{{ $model->labelled }} correct
-      · {{ number_format($model->inputTokens) }} in / {{ number_format($model->outputTokens) }} out tokens
+      · {{ number_format($model->inputTokens) }} in / {{ number_format($model->outputTokens) }} out@if($model->thoughtTokens > 0) / {{ number_format($model->thoughtTokens) }} thought@endif tokens
       · total {{ $money($model->cost) }}
     </p>
 

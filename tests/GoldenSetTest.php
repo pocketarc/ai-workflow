@@ -142,7 +142,7 @@ class GoldenSetTest extends DatabaseTestCase
         Prism::fake([
             StructuredResponseFake::make()
                 ->withStructured(['close_ticket' => ['likelihood' => 90]])
-                ->withUsage(new Usage(11, 22))
+                ->withUsage(new Usage(11, 22, thoughtTokens: 7))
                 ->withFinishReason(FinishReason::Stop),
         ]);
 
@@ -167,6 +167,7 @@ class GoldenSetTest extends DatabaseTestCase
         $this->assertSame('close_ticket', $score->predicted);
         $this->assertSame(11, $score->input_tokens);
         $this->assertSame(22, $score->output_tokens);
+        $this->assertSame(7, $score->thought_tokens);
     }
 
     public function test_eval_run_from_annotations_reports_an_empty_set(): void

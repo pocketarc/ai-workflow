@@ -76,12 +76,14 @@ class EvalReportMetrics
         $errors = 0;
         $inputTokens = 0;
         $outputTokens = 0;
+        $thoughtTokens = 0;
         /** @var list<int> $latencies */
         $latencies = [];
 
         foreach ($scores as $score) {
             $inputTokens += $score->input_tokens ?? 0;
             $outputTokens += $score->output_tokens ?? 0;
+            $thoughtTokens += $score->thought_tokens ?? 0;
 
             if ($score->duration_ms !== null) {
                 $latencies[] = $score->duration_ms;
@@ -124,7 +126,10 @@ class EvalReportMetrics
             confusion: $confusion,
             inputTokens: $inputTokens,
             outputTokens: $outputTokens,
-            cost: $this->costFor($model, $inputTokens, $outputTokens),
+            thoughtTokens: $thoughtTokens,
+            // Providers bill thought tokens at the output rate, so they join
+            // the output side of the cost.
+            cost: $this->costFor($model, $inputTokens, $outputTokens + $thoughtTokens),
             medianLatencyMs: Statistics::percentile($latencies, 0.5),
             p95LatencyMs: Statistics::percentile($latencies, 0.95),
         );
@@ -321,6 +326,7 @@ class EvalReportMetrics
             confusion: $summary->confusion,
             inputTokens: $summary->inputTokens,
             outputTokens: $summary->outputTokens,
+            thoughtTokens: $summary->thoughtTokens,
             cost: $summary->cost,
             medianLatencyMs: $summary->medianLatencyMs,
             p95LatencyMs: $summary->p95LatencyMs,

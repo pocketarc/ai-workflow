@@ -166,6 +166,32 @@ class EvalReportMetricsTest extends DatabaseTestCase
         $this->assertContains('openrouter:b', $report->modelsMissingPricing);
     }
 
+    public function test_thought_tokens_bill_at_the_output_rate(): void
+    {
+        config(['ai-workflow.model_pricing' => [
+            'openrouter:a' => ['input' => 1.0, 'output' => 2.0],
+        ]]);
+
+        $run = AiWorkflowEvalRun::create(['name' => 'Reasoning run', 'models' => ['openrouter:a']]);
+        $requests = $this->makeRequests(2);
+
+        $this->score($run, $requests[0], 'openrouter:a', 'respond', 'respond', 1.0, thoughtTokens: 500);
+        $this->score($run, $requests[1], 'openrouter:a', 'respond', 'respond', 1.0, thoughtTokens: 300);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+        $a = $this->summaryFor($report->models, 'openrouter:a');
+
+        $this->assertSame(800, $a->thoughtTokens);
+
+        // 200 in + 400 out + 800 thought: without the thought tokens the
+        // total would miss the biggest share of a reasoning model's cost.
+        $this->assertEqualsWithDelta(
+            (200 / 1_000_000 * 1.0) + ((400 + 800) / 1_000_000 * 2.0),
+            $a->cost ?? 0.0,
+            1e-9,
+        );
+    }
+
     public function test_it_reports_median_and_p95_latency(): void
     {
         $run = AiWorkflowEvalRun::create(['name' => 'Latency run', 'models' => ['openrouter:a']]);
@@ -276,6 +302,7 @@ class EvalReportMetricsTest extends DatabaseTestCase
         float $score,
         ?string $error = null,
         int $durationMs = 100,
+        ?int $thoughtTokens = null,
     ): void {
         AiWorkflowEvalScore::create([
             'eval_run_id' => $run->id,
@@ -287,6 +314,7 @@ class EvalReportMetricsTest extends DatabaseTestCase
             'predicted' => $predicted,
             'input_tokens' => 100,
             'output_tokens' => 200,
+            'thought_tokens' => $thoughtTokens,
             'duration_ms' => $durationMs,
         ]);
     }

@@ -85,6 +85,7 @@ class AiWorkflowEvalRunner
                     'structured_response' => $response instanceof StructuredResponse ? $response->structured : null,
                     'input_tokens' => $response->usage->promptTokens,
                     'output_tokens' => $response->usage->completionTokens,
+                    'thought_tokens' => $response->usage->thoughtTokens,
                     'duration_ms' => $durationMs,
                     'ground_truth' => $this->groundTruthFor($request),
                     'predicted' => $result->predicted,
