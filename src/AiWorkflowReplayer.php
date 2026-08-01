@@ -41,9 +41,9 @@ class AiWorkflowReplayer
         /** @var array<string, mixed> $templateVariables */
         $templateVariables = $request->template_variables ?? [];
 
-        // Loaded even when replaying the recorded text, because the reasoning
-        // setting lives in front matter and is not stored on the request.
-        // Without it a replay measures the model at its default effort.
+        // Loaded even when replaying the recorded text: the reasoning setting
+        // lives in the prompt's front matter, not on the request, so a replay
+        // without it measures the model at its default effort.
         $prompt = $this->loadPrompt($request->prompt_id, $templateVariables);
 
         if ($useCurrentPrompts && $prompt instanceof PromptData) {
@@ -76,11 +76,11 @@ class AiWorkflowReplayer
     }
 
     /**
-     * The prompt behind a recorded request, or null when it no longer resolves.
+     * The prompt behind a recorded request, or null when it cannot be loaded.
      *
-     * A prompt can be renamed or deleted long after the requests it produced,
-     * and an eval run is a long sequence of paid calls. A missing file costs
-     * the current text and reasoning setting rather than the whole run.
+     * Prompts get renamed and deleted long after a request was recorded, and an
+     * eval run is a long sequence of paid calls. Swallowing the failure costs one
+     * replay its current text and reasoning setting; throwing would cost the run.
      *
      * @param  array<string, mixed>  $variables
      */

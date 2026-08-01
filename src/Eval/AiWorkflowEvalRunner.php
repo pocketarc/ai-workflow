@@ -53,10 +53,9 @@ class AiWorkflowEvalRunner
 
                 try {
                     $startedAt = hrtime(true);
-                    // Today's prompt, not the one recorded alongside the answer.
-                    // Editing a prompt and re-running the golden set is the
-                    // regression test this framework exists for, and scoring
-                    // the historical text would answer a question nobody asked.
+                    // Today's prompt, not the one recorded alongside the answer:
+                    // editing a prompt and re-running the golden set is the
+                    // regression test this framework exists for.
                     $response = $this->replayer->replay($request, useCurrentPrompts: true, model: $model);
                     $durationMs = (int) ((hrtime(true) - $startedAt) / 1_000_000);
                     $result = $judge->judge($request, $response);
