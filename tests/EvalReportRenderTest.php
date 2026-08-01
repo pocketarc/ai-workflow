@@ -53,6 +53,21 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringContainsString('1.000 (0–1)', $html);
     }
 
+    public function test_it_reports_thought_tokens(): void
+    {
+        $run = $this->seedRun(thoughtTokens: 216);
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        // Four scored requests per model, so the per-model total is 864.
+        $this->assertStringContainsString('/ 864 thought tokens', $html);
+
+        // A directive glued to a word character is left uncompiled by Blade,
+        // which puts the condition itself on the page.
+        $this->assertStringNotContainsString('@if', $html);
+        $this->assertStringNotContainsString('@endif', $html);
+    }
+
     public function test_it_warns_when_a_model_mostly_failed(): void
     {
         // A model that could not be called at all scores 0%, which reads as
@@ -186,7 +201,7 @@ class EvalReportRenderTest extends DatabaseTestCase
             ->assertFailed();
     }
 
-    private function seedRun(): AiWorkflowEvalRun
+    private function seedRun(?int $thoughtTokens = null): AiWorkflowEvalRun
     {
         $run = AiWorkflowEvalRun::create([
             'name' => 'Comparison run',
@@ -218,6 +233,7 @@ class EvalReportRenderTest extends DatabaseTestCase
                     'predicted' => $predicted,
                     'input_tokens' => 100,
                     'output_tokens' => 200,
+                    'thought_tokens' => $thoughtTokens,
                     'duration_ms' => 100,
                 ]);
             }
