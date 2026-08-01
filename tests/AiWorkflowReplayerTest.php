@@ -114,6 +114,59 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
         });
     }
 
+    public function test_replay_applies_the_reasoning_setting_from_the_prompt(): void
+    {
+        $recorded = AiWorkflowRequest::create([
+            'prompt_id' => 'reasoning_effort_prompt',
+            'method' => 'sendMessages',
+            'provider' => 'openrouter',
+            'model' => 'test/model',
+            'system_prompt' => 'You are a helpful reasoning assistant.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+        ]);
+
+        $fake = Prism::fake([
+            TextResponseFake::make()->withText('Replayed')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        app(AiWorkflowReplayer::class)->replay($recorded);
+
+        // Reasoning rides on provider options, so a replay that omits them
+        // measures the model at its default effort, not the prompt's.
+        $fake->assertRequest(function (array $requests): void {
+            $this->assertSame(['effort' => 'high'], $requests[0]->providerOptions('reasoning'));
+        });
+    }
+
+    public function test_replay_falls_back_to_the_recorded_prompt_when_the_file_is_gone(): void
+    {
+        $recorded = AiWorkflowRequest::create([
+            'prompt_id' => 'prompt_that_no_longer_exists',
+            'method' => 'sendMessages',
+            'provider' => 'openrouter',
+            'model' => 'test/model',
+            'system_prompt' => 'Recorded system prompt.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+        ]);
+
+        $fake = Prism::fake([
+            TextResponseFake::make()->withText('Replayed')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $result = app(AiWorkflowReplayer::class)->replay($recorded);
+
+        $this->assertSame('Replayed', $result->text);
+
+        $fake->assertRequest(function (array $requests): void {
+            $this->assertSame('Recorded system prompt.', $requests[0]->systemPrompts()[0]->content);
+            $this->assertSame([], $requests[0]->providerOptions());
+        });
+    }
+
     public function test_replay_with_current_prompts(): void
     {
         Prism::fake([

@@ -16,6 +16,7 @@ use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Text\Response;
+use RuntimeException;
 
 class AiWorkflowReplayer
 {
@@ -37,10 +38,15 @@ class AiWorkflowReplayer
         $replayProvider = $request->provider;
         $replayModel = $request->model;
 
-        if ($useCurrentPrompts) {
-            /** @var array<string, mixed> $templateVariables */
-            $templateVariables = $request->template_variables ?? [];
-            $prompt = $this->promptService->load($request->prompt_id, $templateVariables);
+        /** @var array<string, mixed> $templateVariables */
+        $templateVariables = $request->template_variables ?? [];
+
+        // Loaded even when replaying the recorded text, because the reasoning
+        // setting lives in front matter and is not stored on the request.
+        // Without it a replay measures the model at its default effort.
+        $prompt = $this->loadPrompt($request->prompt_id, $templateVariables);
+
+        if ($useCurrentPrompts && $prompt instanceof PromptData) {
             $systemPrompt = $prompt->prompt;
 
             if ($model === null) {
@@ -61,12 +67,30 @@ class AiWorkflowReplayer
 
         return match ($request->method) {
             'sendStructuredMessages', 'sendStructuredMessagesWithTools' => $this->replayStructured(
-                $replayProvider, $replayModel, $systemPrompt, $messages, $request, $clientOptions,
+                $replayProvider, $replayModel, $systemPrompt, $messages, $request, $clientOptions, $prompt,
             ),
             default => $this->replayText(
-                $replayProvider, $replayModel, $systemPrompt, $messages, $clientOptions,
+                $replayProvider, $replayModel, $systemPrompt, $messages, $clientOptions, $prompt,
             ),
         };
+    }
+
+    /**
+     * The prompt behind a recorded request, or null when it no longer resolves.
+     *
+     * A prompt can be renamed or deleted long after the requests it produced,
+     * and an eval run is a long sequence of paid calls. A missing file costs
+     * the current text and reasoning setting rather than the whole run.
+     *
+     * @param  array<string, mixed>  $variables
+     */
+    private function loadPrompt(string $id, array $variables): ?PromptData
+    {
+        try {
+            return $this->promptService->load($id, $variables);
+        } catch (RuntimeException) {
+            return null;
+        }
     }
 
     /**
@@ -125,6 +149,7 @@ class AiWorkflowReplayer
         string $systemPrompt,
         array $messages,
         array $clientOptions,
+        ?PromptData $prompt,
     ): Response {
         /** @var array{text: int, structured: int} $maxTokens */
         $maxTokens = config('ai-workflow.max_tokens');
@@ -134,6 +159,12 @@ class AiWorkflowReplayer
             ->withMessages($messages)
             ->withMaxTokens($maxTokens['text'])
             ->withClientOptions($clientOptions);
+
+        $reasoningOptions = $prompt?->resolveReasoningOptions($provider, $maxTokens['text']) ?? [];
+
+        if ($reasoningOptions !== []) {
+            $builder = $builder->withProviderOptions($reasoningOptions);
+        }
 
         if ($systemPrompt !== '') {
             $builder = $builder->withSystemPrompt($systemPrompt);
@@ -153,6 +184,7 @@ class AiWorkflowReplayer
         array $messages,
         AiWorkflowRequest $request,
         array $clientOptions,
+        ?PromptData $prompt,
     ): StructuredResponse {
         /** @var array{text: int, structured: int} $maxTokens */
         $maxTokens = config('ai-workflow.max_tokens');
@@ -165,6 +197,12 @@ class AiWorkflowReplayer
             ->withMessages($messages)
             ->withMaxTokens($maxTokens['structured'])
             ->withClientOptions($clientOptions);
+
+        $reasoningOptions = $prompt?->resolveReasoningOptions($provider, $maxTokens['structured']) ?? [];
+
+        if ($reasoningOptions !== []) {
+            $builder = $builder->withProviderOptions($reasoningOptions);
+        }
 
         if ($systemPrompt !== '') {
             $builder = $builder->withSystemPrompt($systemPrompt);
