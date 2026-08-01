@@ -6,6 +6,7 @@ namespace AiWorkflow\Eval;
 
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
+use AiWorkflow\Models\AiWorkflowRequest;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
 
@@ -25,6 +26,10 @@ class EvalReportMetrics
      * inflate accuracy by shrinking the denominator.
      */
     public const string NO_PREDICTION = '(no answer)';
+
+    public function __construct(
+        private readonly ReviewContextLookup $context,
+    ) {}
 
     public function compute(AiWorkflowEvalRun $run, ?string $baseline = null, int $maxDecisions = 200): EvalReport
     {
@@ -466,7 +471,55 @@ class EvalReportMetrics
             return $byContest !== 0 ? $byContest : $a->requestId <=> $b->requestId;
         });
 
-        return array_slice($decisions, 0, $maxDecisions);
+        return $this->withContext(array_slice($decisions, 0, $maxDecisions));
+    }
+
+    /**
+     * Attach the host app's context to each decision.
+     *
+     * Called after truncation, so the host app only ever resolves as many
+     * records as the decision cap allows, however large the run.
+     *
+     * @param  list<EvalReportDecision>  $decisions
+     * @return list<EvalReportDecision>
+     */
+    private function withContext(array $decisions): array
+    {
+        if ($decisions === []) {
+            return $decisions;
+        }
+
+        $ids = array_map(
+            static fn (EvalReportDecision $decision): int => $decision->requestId,
+            $decisions,
+        );
+
+        // Narrow on purpose, as in the review UI: `messages` contains the whole
+        // prompt, and a page of multimodal ones exhausts memory. Resolvers work
+        // from the execution and prompt ids, so the prompt text is not needed.
+        /** @var list<AiWorkflowRequest> $requests */
+        $requests = AiWorkflowRequest::query()
+            ->select(['id', 'execution_id', 'prompt_id', 'created_at'])
+            ->whereIn('id', $ids)
+            ->get()
+            ->all();
+
+        $contexts = $this->context->for($requests);
+
+        if ($contexts === []) {
+            return $decisions;
+        }
+
+        return array_map(
+            static fn (EvalReportDecision $decision): EvalReportDecision => new EvalReportDecision(
+                requestId: $decision->requestId,
+                groundTruth: $decision->groundTruth,
+                input: $decision->input,
+                byModel: $decision->byModel,
+                context: $contexts[$decision->requestId] ?? null,
+            ),
+            $decisions,
+        );
     }
 
     private function summariseInput(AiWorkflowEvalScore $score, int $limit = 400): string

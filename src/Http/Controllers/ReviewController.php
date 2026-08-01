@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace AiWorkflow\Http\Controllers;
 
 use AiWorkflow\Enums\AnnotationVerdict;
-use AiWorkflow\Eval\ReviewContext;
-use AiWorkflow\Eval\ReviewContextResolver;
+use AiWorkflow\Eval\ReviewContextLookup;
 use AiWorkflow\Eval\StructuredResponsePresenter;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowRequest;
@@ -16,12 +15,14 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-use LogicException;
 use Symfony\Component\HttpFoundation\InputBag;
-use Throwable;
 
 class ReviewController
 {
+    public function __construct(
+        private readonly ReviewContextLookup $context,
+    ) {}
+
     public function index(Request $request): View
     {
         $promptId = $this->stringFrom($request->query, 'prompt');
@@ -57,69 +58,13 @@ class ReviewController
 
         return view('ai-workflow::review.index', [
             'requests' => $requests,
-            'context' => $this->resolveContext(array_values($requests->items())),
+            'context' => $this->context->for(array_values($requests->items())),
             'promptId' => $promptId,
             'tag' => $tag,
             'includeReviewed' => $includeReviewed,
             'outstanding' => AiWorkflowRequest::query()->successful()->whereDoesntHave('annotations')->count(),
             'reviewed' => AiWorkflowAnnotation::query()->latestPerRequest()->count(),
         ]);
-    }
-
-    /**
-     * The situation around each request, if the host app has told us how to
-     * find it. A resolver that fails must not take the review page down with
-     * it — labelling is the point, context is a convenience.
-     *
-     * @param  list<AiWorkflowRequest>  $requests
-     * @return array<int, ReviewContext>
-     */
-    private function resolveContext(array $requests): array
-    {
-        $configured = config('ai-workflow.review.context');
-
-        if (! is_string($configured) || $configured === '' || ! class_exists($configured)) {
-            return [];
-        }
-
-        try {
-            $resolver = app($configured);
-
-            if (! $resolver instanceof ReviewContextResolver) {
-                return [];
-            }
-
-            return $this->validatedContext($resolver->resolve($requests));
-        } catch (Throwable $e) {
-            report($e);
-
-            return [];
-        }
-    }
-
-    /**
-     * The interface promises ReviewContext values keyed by request id, but the
-     * resolver is host-app code, and a wrong-shaped entry would only surface as
-     * a fatal in the view, outside the try/catch meant to keep context failures
-     * harmless. Throwing here instead lands the mistake in that catch, where it
-     * is reported and the page falls back to no context.
-     *
-     * @param  array<array-key, mixed>  $resolved
-     * @return array<int, ReviewContext>
-     */
-    private function validatedContext(array $resolved): array
-    {
-        $contexts = [];
-
-        foreach ($resolved as $id => $context) {
-            if (! is_int($id) || ! $context instanceof ReviewContext) {
-                throw new LogicException('Review context resolver returned '.get_debug_type($context).' keyed by '.get_debug_type($id).', expected ReviewContext instances keyed by request id.');
-            }
-
-            $contexts[$id] = $context;
-        }
-
-        return $contexts;
     }
 
     /**

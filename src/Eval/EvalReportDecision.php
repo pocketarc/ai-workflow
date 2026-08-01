@@ -18,6 +18,7 @@ class EvalReportDecision
         public readonly ?string $groundTruth,
         public readonly string $input,
         public readonly array $byModel,
+        public readonly ?ReviewContext $context = null,
     ) {}
 
     /**

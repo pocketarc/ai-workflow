@@ -66,6 +66,8 @@
   summary { cursor: pointer; font-weight: 600; font-size: .9rem; }
   .bar { height: 6px; border-radius: 3px; background: var(--accent); display: inline-block; vertical-align: middle; }
   code { background: var(--panel); padding: .1rem .3rem; border-radius: 3px; font-size: .85em; }
+  a { color: var(--accent); }
+  .links a { margin-right: .9rem; }
   footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .82rem; }
   footer li { margin-bottom: .3rem; }
 </style>
@@ -258,6 +260,19 @@
         #{{ $decision->requestId }} — human: {{ $decision->groundTruth ?? 'unlabelled' }}
         @if($decision->isContested())<span class="tag">disputed</span>@endif
       </summary>
+      @if($decision->context !== null && ! $decision->context->isEmpty())
+        @if($decision->context->links !== [])
+          <p class="note links">
+            @foreach($decision->context->links as $link)
+              <a href="{{ $link['url'] }}">{{ $link['label'] }}</a>
+            @endforeach
+          </p>
+        @endif
+        @foreach($decision->context->notes as $heading => $note)
+          <h3>{{ $heading }}</h3>
+          <p class="note" style="white-space: pre-wrap">{{ $note }}</p>
+        @endforeach
+      @endif
       <table>
         <thead><tr><th>Model</th><th>Predicted</th><th>Score</th></tr></thead>
         <tbody>
