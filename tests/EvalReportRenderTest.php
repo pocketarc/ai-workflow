@@ -68,6 +68,17 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringNotContainsString('@endif', $html);
     }
 
+    public function test_it_omits_thought_tokens_when_a_model_reported_none(): void
+    {
+        $run = $this->seedRun();
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        // The test above would still pass if the renderer emitted the
+        // thought-token line unconditionally.
+        $this->assertStringNotContainsString('thought tokens', $html);
+    }
+
     public function test_it_warns_when_a_model_mostly_failed(): void
     {
         // A model that could not be called at all scores 0%, which reads as

@@ -38,8 +38,10 @@ class AiWorkflowReplayer
         $replayProvider = $request->provider;
         $replayModel = $request->model;
 
-        /** @var array<string, mixed> $templateVariables */
-        $templateVariables = $request->template_variables ?? [];
+        // The property is annotated as an array, but Laravel's array cast is
+        // json_decode with no type check, so a scalar in this column stays a scalar.
+        $storedVariables = $request->template_variables;
+        $templateVariables = is_array($storedVariables) ? $storedVariables : [];
 
         // Loaded even when replaying the recorded text: the reasoning setting
         // lives in the prompt's front matter, not on the request, so a replay

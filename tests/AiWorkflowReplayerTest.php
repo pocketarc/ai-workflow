@@ -133,8 +133,45 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
 
         app(AiWorkflowReplayer::class)->replay($recorded);
 
-        // Reasoning rides on provider options, so a replay that omits them
+        // Reasoning is carried in provider options, so a replay that omits them
         // measures the model at its default effort, not the prompt's.
+        $fake->assertRequest(function (array $requests): void {
+            $this->assertSame(['effort' => 'high'], $requests[0]->providerOptions('reasoning'));
+        });
+    }
+
+    public function test_replay_applies_the_reasoning_setting_to_a_structured_request(): void
+    {
+        $recorded = AiWorkflowRequest::create([
+            'prompt_id' => 'reasoning_effort_prompt',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test/model',
+            'system_prompt' => 'You are a helpful reasoning assistant.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+            'schema' => [
+                'type' => 'object',
+                'name' => 'answer',
+                'description' => 'An answer',
+                'properties' => [
+                    'answer' => ['type' => 'string', 'description' => 'The answer'],
+                ],
+                'required' => ['answer'],
+            ],
+        ]);
+
+        $fake = Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'replayed'])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        app(AiWorkflowReplayer::class)->replay($recorded);
+
+        // Eval runs go through replayStructured(), which builds its request
+        // separately from replayText(), so the text test above covers none of it.
         $fake->assertRequest(function (array $requests): void {
             $this->assertSame(['effort' => 'high'], $requests[0]->providerOptions('reasoning'));
         });
