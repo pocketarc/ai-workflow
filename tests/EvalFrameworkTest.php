@@ -133,6 +133,38 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertSame('Hello world', $scoreA->response_text);
     }
 
+    public function test_eval_runner_replays_against_todays_prompt(): void
+    {
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'test_prompt',
+            'method' => 'sendMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'The prompt as it read months ago.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+        ]);
+
+        $fake = Prism::fake([
+            TextResponseFake::make()->withText('Replayed')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        app(AiWorkflowEvalRunner::class)->run(
+            name: 'Prompt regression',
+            requests: [$request],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        // Re-running the golden set after editing a prompt is the regression
+        // test this framework exists for, so replaying the recorded text would
+        // score a prompt nobody is using any more.
+        $fake->assertRequest(function (array $requests): void {
+            $this->assertSame('You are a helpful test assistant.', $requests[0]->systemPrompts()[0]->content);
+        });
+    }
+
     public function test_eval_runner_stores_structured_response(): void
     {
         Prism::fake([

@@ -53,7 +53,10 @@ class AiWorkflowEvalRunner
 
                 try {
                     $startedAt = hrtime(true);
-                    $response = $this->replayer->replay($request, model: $model);
+                    // Today's prompt, not the one recorded alongside the answer:
+                    // editing a prompt and re-running the golden set is the
+                    // regression test this framework exists for.
+                    $response = $this->replayer->replay($request, useCurrentPrompts: true, model: $model);
                     $durationMs = (int) ((hrtime(true) - $startedAt) / 1_000_000);
                     $result = $judge->judge($request, $response);
                 } catch (Throwable $e) {
