@@ -494,9 +494,6 @@ class EvalReportMetrics
             $decisions,
         );
 
-        // Narrow on purpose, as in the review UI: `messages` contains the whole
-        // prompt, and a page of multimodal ones exhausts memory. Resolvers work
-        // from the execution and prompt ids, so the prompt text is not needed.
         /** @var list<AiWorkflowRequest> $requests */
         $requests = AiWorkflowRequest::query()
             ->select(['id', 'execution_id', 'prompt_id', 'created_at'])
