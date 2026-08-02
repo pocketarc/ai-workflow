@@ -50,6 +50,13 @@ class ReviewContext
      */
     private static function isSafeScheme(string $url): bool
     {
+        // A browser strips control characters and surrounding space before it
+        // resolves a URL, so "java\nscript:alert(1)" runs, while parse_url()
+        // finds no scheme in it and would otherwise pass it off as relative.
+        if (preg_match('/[\x00-\x20\x7F]/', $url) === 1) {
+            return false;
+        }
+
         $scheme = parse_url($url, PHP_URL_SCHEME);
 
         if ($scheme === false) {

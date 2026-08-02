@@ -22,9 +22,19 @@ class ReviewContextLookup
      */
     public function isConfigured(): bool
     {
+        return $this->configuredResolver() !== null;
+    }
+
+    /**
+     * @return class-string|null
+     */
+    private function configuredResolver(): ?string
+    {
         $configured = config('ai-workflow.review.context');
 
-        return is_string($configured) && $configured !== '' && class_exists($configured);
+        return is_string($configured) && $configured !== '' && class_exists($configured)
+            ? $configured
+            : null;
     }
 
     /**
@@ -35,12 +45,11 @@ class ReviewContextLookup
      */
     public function for(array $requests): array
     {
-        if ($requests === [] || ! $this->isConfigured()) {
+        $configured = $this->configuredResolver();
+
+        if ($requests === [] || $configured === null) {
             return [];
         }
-
-        /** @var class-string $configured */
-        $configured = config('ai-workflow.review.context');
 
         try {
             $resolver = app($configured);
