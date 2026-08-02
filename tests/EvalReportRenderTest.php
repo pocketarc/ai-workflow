@@ -124,6 +124,83 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringNotContainsString('Last comment before this decision', $html);
     }
 
+    public function test_it_flags_a_decision_every_model_chose_against(): void
+    {
+        $run = AiWorkflowEvalRun::create(['name' => 'Disagreement run', 'models' => ['openrouter:a', 'openrouter:b']]);
+
+        $agreed = $this->seedDecision($run, truth: 'respond', predictions: ['respond', 'respond']);
+        $against = $this->seedDecision($run, truth: 'close', predictions: ['wait', 'wait']);
+        $split = $this->seedDecision($run, truth: 'chase', predictions: ['chase', 'wait']);
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        $flagged = $this->summaryFor($html, $against);
+        $this->assertStringContainsString('all disagree', $flagged);
+
+        // A decision one model got right is a model gap, not a reason to
+        // re-read the label, so it must not carry the same flag.
+        $this->assertStringNotContainsString('all disagree', $this->summaryFor($html, $split));
+        $this->assertStringNotContainsString('all disagree', $this->summaryFor($html, $agreed));
+
+        // The two flags answer different questions and can both apply.
+        $this->assertStringContainsString('disputed', $this->summaryFor($html, $split));
+    }
+
+    public function test_it_does_not_flag_an_unlabelled_decision(): void
+    {
+        $run = AiWorkflowEvalRun::create(['name' => 'Unlabelled run', 'models' => ['openrouter:a']]);
+        $id = $this->seedDecision($run, truth: null, predictions: ['respond']);
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        // With no label there is nothing to disagree with.
+        $this->assertStringNotContainsString('all disagree', $this->summaryFor($html, $id));
+    }
+
+    /**
+     * @param  list<string>  $predictions  One per model, in the run's order.
+     */
+    private function seedDecision(AiWorkflowEvalRun $run, ?string $truth, array $predictions): int
+    {
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'decide_next_action',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'Decide.',
+            'messages' => [['type' => 'user', 'content' => 'Ticket body']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+        ]);
+
+        foreach ($predictions as $index => $predicted) {
+            AiWorkflowEvalScore::create([
+                'eval_run_id' => $run->id,
+                'request_id' => $request->id,
+                'model' => ['openrouter:a', 'openrouter:b'][$index],
+                'score' => $predicted === $truth ? 1.0 : 0.0,
+                'ground_truth' => $truth,
+                'predicted' => $predicted,
+                'input_tokens' => 10,
+                'output_tokens' => 20,
+                'duration_ms' => 100,
+            ]);
+        }
+
+        return $request->id;
+    }
+
+    /**
+     * The one decision's summary line, so a flag on a sibling cannot satisfy
+     * an assertion about this one.
+     */
+    private function summaryFor(string $html, int $requestId): string
+    {
+        preg_match('/<summary>\s*#'.$requestId.'\b.*?<\/summary>/s', $html, $matches);
+
+        return $matches[0] ?? '';
+    }
+
     public function test_it_warns_when_a_model_mostly_failed(): void
     {
         // A model that could not be called at all scores 0%, which reads as

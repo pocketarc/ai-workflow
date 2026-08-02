@@ -33,4 +33,27 @@ class EvalReportDecision
 
         return count(array_unique($predictions, SORT_REGULAR)) > 1;
     }
+
+    /**
+     * Whether every model disagreed with the human label.
+     *
+     * One model missing an answer is a model problem. All of them missing the
+     * same answer is more often the label being wrong or the prompt being
+     * unclear, and those are worth re-reading before anything is concluded
+     * about the models.
+     */
+    public function isUnanimouslyAgainstLabel(): bool
+    {
+        if ($this->groundTruth === null || $this->byModel === []) {
+            return false;
+        }
+
+        foreach ($this->byModel as $result) {
+            if ($result['predicted'] === $this->groundTruth) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

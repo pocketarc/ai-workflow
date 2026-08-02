@@ -66,6 +66,7 @@
   summary { cursor: pointer; font-weight: 600; font-size: .9rem; }
   .bar { height: 6px; border-radius: 3px; background: var(--accent); display: inline-block; vertical-align: middle; }
   code { background: var(--panel); padding: .1rem .3rem; border-radius: 3px; font-size: .85em; }
+  .tag.flag { background: var(--warn-bg); border-color: var(--warn-line); color: #8a6d1f; }
   a { color: var(--accent); }
   .links a { margin-right: .9rem; }
   footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .82rem; }
@@ -253,12 +254,13 @@
   @endforeach
 
   <h2>Decisions</h2>
-  <p class="note">Items the models disagreed on are listed first — those are where the prompt is ambiguous or a model is weak.</p>
+  <p class="note">Items the models disagreed on are listed first — those are where the prompt is ambiguous or a model is weak. <strong>All disagree</strong> means every model chose against the label, which more often means the label or the prompt needs re-reading than that every model is wrong.</p>
   @foreach($report->decisions as $decision)
     <details>
       <summary>
         #{{ $decision->requestId }} — human: {{ $decision->groundTruth ?? 'unlabelled' }}
         @if($decision->isContested())<span class="tag">disputed</span>@endif
+        @if($decision->isUnanimouslyAgainstLabel())<span class="tag flag">all disagree</span>@endif
       </summary>
       @if($decision->context !== null && ! $decision->context->isEmpty())
         @if($decision->context->links !== [])
