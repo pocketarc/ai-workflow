@@ -8,8 +8,15 @@ use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use AiWorkflow\PrismExceptionInspector;
 use Illuminate\Support\Facades\Log;
-use Prism\Prism\Exceptions\PrismException;
+use Integrations\Contracts\CustomizesRetry;
+use Integrations\Contracts\IntegrationProvider;
+use Integrations\Enums\FailureClass;
+use Integrations\IntegrationManager;
+use Integrations\RetryHandler;
+use Integrations\Support\FailureClassifier;
+use Integrations\Support\ResponseHelper;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Text\Response;
 use Throwable;
@@ -116,51 +123,100 @@ class AiWorkflowEvalRunner
     }
 
     /**
-     * The human-approved answer attached to this request by the golden-set
-     * assembly, if any. Transient — it is never persisted on the request itself.
-     */
-    /**
-     * Replay one request, retrying a transient failure.
-     *
-     * Generation is non-deterministic, so a response the provider could not
-     * classify often succeeds on a second attempt. Scoring that as a wrong
-     * answer would blame the model for a blip. A 4xx is the provider refusing
-     * the request itself, which a retry only pays for again.
+     * Replay one request with the failure classification and retry delay used
+     * for ordinary AI requests.
      */
     private function replay(AiWorkflowRequest $request, string $model): Response|StructuredResponse
     {
         $attempts = config('ai-workflow.eval.replay_tries');
         $attempts = is_int($attempts) && $attempts > 0 ? $attempts : self::DEFAULT_REPLAY_TRIES;
+        $provider = $this->providerForModel($model);
 
         for ($attempt = 1; ; $attempt++) {
             try {
                 return $this->replayer->replay($request, useCurrentPrompts: true, model: $model);
-            } catch (Throwable $e) {
-                if ($attempt >= $attempts || $this->isPermanent($e)) {
-                    throw $e;
+            } catch (Throwable $error) {
+                if ($attempt >= $attempts || ! $this->isRetryable($error, $provider)) {
+                    throw $error;
                 }
+
+                $delayMs = $this->retryDelayMs($error, $attempt, $provider);
 
                 Log::warning('AiWorkflow: Eval replay failed, retrying', [
                     'request_id' => $request->id,
                     'model' => $model,
                     'attempt' => $attempt,
-                    'error' => $e->getMessage(),
+                    'retry_delay_ms' => $delayMs,
+                    'error' => $error->getMessage(),
                 ]);
+
+                if ($delayMs > 0) {
+                    usleep($delayMs * 1000);
+                }
             }
         }
     }
 
-    /**
-     * Whether retrying would fail the same way: the provider rejected the
-     * request rather than fumbled the response.
-     */
-    private function isPermanent(Throwable $e): bool
+    private function isRetryable(Throwable $error, ?IntegrationProvider $provider): bool
     {
-        $status = $e instanceof PrismException ? $e->httpStatus : null;
+        if ($provider instanceof CustomizesRetry) {
+            $retryable = $provider->isRetryable($error);
 
-        return is_int($status) && $status >= 400 && $status < 500;
+            if ($retryable !== null) {
+                return $retryable;
+            }
+        }
+
+        if (RetryHandler::isRetryable($error)) {
+            return true;
+        }
+
+        $failureClass = FailureClassifier::classify($error, $provider);
+        if ($failureClass !== FailureClass::Unknown) {
+            return $failureClass->isRetryable();
+        }
+
+        $status = PrismExceptionInspector::httpStatus($error);
+
+        return $status !== null && FailureClass::fromStatus($status)->isRetryable();
     }
 
+    private function retryDelayMs(Throwable $error, int $attempt, ?IntegrationProvider $provider): int
+    {
+        $status = ResponseHelper::extractStatusCode($error) ?? PrismExceptionInspector::httpStatus($error);
+
+        if ($provider instanceof CustomizesRetry) {
+            $delayMs = $provider->retryDelayMs($error, $attempt, $status);
+
+            if ($delayMs !== null) {
+                return $delayMs;
+            }
+        }
+
+        return RetryHandler::calculateDelayMs($error, $attempt);
+    }
+
+    /**
+     * Return the registered integration provider for a valid `provider:model`
+     * identifier. Return null if the identifier is invalid or the provider is
+     * not registered.
+     */
+    private function providerForModel(string $model): ?IntegrationProvider
+    {
+        $parts = explode(':', $model, 2);
+        if (count($parts) !== 2 || $parts[0] === '') {
+            return null;
+        }
+
+        $manager = app(IntegrationManager::class);
+
+        return $manager->has($parts[0]) ? $manager->provider($parts[0]) : null;
+    }
+
+    /**
+     * The human-approved answer attached to this request by the golden-set
+     * assembly, if any. Transient — it is never persisted on the request itself.
+     */
     private function groundTruthFor(AiWorkflowRequest $request): ?string
     {
         $groundTruth = $request->getAttribute(AiWorkflowRequest::GROUND_TRUTH_ATTRIBUTE);

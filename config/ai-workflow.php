@@ -71,10 +71,10 @@ return [
     'middleware' => [],
 
     'eval' => [
-        // Attempts per replay, counting the first. A provider that cannot
-        // classify its own response often succeeds on a second try, but every
-        // attempt is a paid call on every item in a run, so keep this low.
-        // A 4xx is never retried: the provider rejected the request itself.
+        // Set the number of attempts per replay, including the first attempt. If the
+        // integration provider is registered, the runner uses its failure policy to
+        // classify failures and calculate retry delays. Keep this value low because
+        // you pay for one call per item on every attempt.
         'replay_tries' => 2,
     ],
 
