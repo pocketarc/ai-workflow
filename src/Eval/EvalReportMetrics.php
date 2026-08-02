@@ -485,7 +485,7 @@ class EvalReportMetrics
      */
     private function withContext(array $decisions): array
     {
-        if ($decisions === []) {
+        if ($decisions === [] || ! $this->context->isConfigured()) {
             return $decisions;
         }
 

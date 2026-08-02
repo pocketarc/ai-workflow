@@ -38,6 +38,26 @@ class ReviewContext
         if (! is_array($link) || ! is_string($link['label'] ?? null) || ! is_string($link['url'] ?? null)) {
             throw new LogicException('Review context links must be arrays with string label and url, got '.get_debug_type($link).'.');
         }
+
+        if (! self::isSafeScheme($link['url'])) {
+            throw new LogicException('Review context link URLs must be http, https or relative, got '.$link['url'].'.');
+        }
+    }
+
+    /**
+     * Blade escapes the href, but `javascript:` needs no escaping to run, and
+     * a resolver may build a URL from a ticket field someone else wrote.
+     */
+    private static function isSafeScheme(string $url): bool
+    {
+        $scheme = parse_url($url, PHP_URL_SCHEME);
+
+        if ($scheme === false) {
+            return false;
+        }
+
+        // No scheme is a relative link to the host app's own site.
+        return $scheme === null || in_array(strtolower($scheme), ['http', 'https'], true);
     }
 
     private static function assertNote(mixed $heading, mixed $note): void

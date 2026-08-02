@@ -17,6 +17,17 @@ use Throwable;
 class ReviewContextLookup
 {
     /**
+     * Whether the host app named a resolver, so callers can skip the work of
+     * gathering requests that nothing will be done with.
+     */
+    public function isConfigured(): bool
+    {
+        $configured = config('ai-workflow.review.context');
+
+        return is_string($configured) && $configured !== '' && class_exists($configured);
+    }
+
+    /**
      * @param  list<AiWorkflowRequest>  $requests
      * @return array<int, ReviewContext> Keyed by request id. Empty when no
      *                                   resolver is configured, and empty when
@@ -24,21 +35,20 @@ class ReviewContextLookup
      */
     public function for(array $requests): array
     {
-        if ($requests === []) {
+        if ($requests === [] || ! $this->isConfigured()) {
             return [];
         }
 
+        /** @var class-string $configured */
         $configured = config('ai-workflow.review.context');
-
-        if (! is_string($configured) || $configured === '' || ! class_exists($configured)) {
-            return [];
-        }
 
         try {
             $resolver = app($configured);
 
             if (! $resolver instanceof ReviewContextResolver) {
-                return [];
+                // Thrown rather than returned, so a misconfigured resolver is
+                // reported like a broken one instead of silently doing nothing.
+                throw new LogicException($configured.' is configured as the review context resolver but does not implement '.ReviewContextResolver::class.'.');
             }
 
             return $this->validated($resolver->resolve($requests));
