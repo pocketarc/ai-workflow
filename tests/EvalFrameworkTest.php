@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Tests;
 
+use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Eval\AiJudge;
 use AiWorkflow\Eval\AiWorkflowEvalJudge;
 use AiWorkflow\Eval\AiWorkflowEvalResult;
@@ -11,10 +12,17 @@ use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use GuzzleHttp\Psr7\Response as PsrResponse;
 use Illuminate\Database\Eloquent\JsonEncodingException;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Client\Response as HttpClientResponse;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use Mockery\MockInterface;
 use Prism\Prism\Enums\FinishReason;
+use Prism\Prism\Exceptions\PrismException;
+use Prism\Prism\Exceptions\PrismRateLimitedException;
+use Prism\Prism\Exceptions\PrismRequestTooLargeException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Testing\StructuredResponseFake;
@@ -22,6 +30,7 @@ use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Response;
 use Prism\Prism\ValueObjects\Meta;
 use Prism\Prism\ValueObjects\Usage;
+use RuntimeException;
 
 class EvalFrameworkTest extends DatabaseTestCase
 {
@@ -367,6 +376,137 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertSame(['tag' => 'classification'], $evalRun->config);
     }
 
+    public function test_eval_runner_retries_a_replay_the_provider_fumbled(): void
+    {
+        $attempts = 0;
+
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock) use (&$attempts): void {
+            $mock->shouldReceive('replay')->twice()->andReturnUsing(function () use (&$attempts): Response {
+                $attempts++;
+
+                if ($attempts === 1) {
+                    throw new PrismException('OpenRouter: unknown finish reason');
+                }
+
+                return $this->makeTextResponse('Second time lucky');
+            });
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Retry eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame('Second time lucky', $score->response_text);
+        $this->assertNull($score->details['error'] ?? null);
+    }
+
+    public function test_eval_runner_gives_up_after_the_configured_attempts(): void
+    {
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('replay')->twice()->andThrow(new PrismException('OpenRouter: unknown finish reason'));
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Exhausted eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame(0.0, (float) $score->score);
+        $this->assertStringContainsString('unknown finish reason', (string) ($score->details['error'] ?? ''));
+    }
+
+    public function test_eval_runner_does_not_retry_a_request_the_provider_rejected(): void
+    {
+        $httpResponse = new HttpClientResponse(new PsrResponse(404, [], '{"error":"model unavailable"}'));
+        $rejected = PrismException::providerRequestError(
+            'openrouter:model-a',
+            new RequestException($httpResponse),
+        );
+
+        // Prism does not copy the status from the RequestException to the outer
+        // PrismException. The retry classifier must inspect the exception chain.
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock) use ($rejected): void {
+            $mock->shouldReceive('replay')->once()->andThrow($rejected);
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Rejected eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $this->assertSame(0.0, (float) ($evalRun->scores->first()?->score ?? -1.0));
+    }
+
+    public function test_eval_runner_does_not_retry_a_request_that_is_too_large(): void
+    {
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('replay')->once()->andThrow(PrismRequestTooLargeException::make('openrouter'));
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Oversized eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $this->assertSame(0.0, (float) ($evalRun->scores->first()?->score ?? -1.0));
+    }
+
+    public function test_eval_runner_does_not_retry_an_unrelated_runtime_failure(): void
+    {
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('replay')->once()->andThrow(new RuntimeException('local failure'));
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Local failure eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $this->assertSame(0.0, (float) ($evalRun->scores->first()?->score ?? -1.0));
+    }
+
+    public function test_eval_runner_retries_a_rate_limit_with_the_provider_delay(): void
+    {
+        config()->set('ai-workflow.retry.rate_limit_delay_ms', 0);
+
+        $attempts = 0;
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock) use (&$attempts): void {
+            $mock->shouldReceive('replay')->twice()->andReturnUsing(function () use (&$attempts): Response {
+                $attempts++;
+
+                if ($attempts === 1) {
+                    throw PrismRateLimitedException::make();
+                }
+
+                return $this->makeTextResponse('Recovered after throttling');
+            });
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Rate-limited eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $this->assertSame('Recovered after throttling', $evalRun->scores->first()?->response_text);
+    }
+
     public function test_eval_runner_handles_partial_failure(): void
     {
         Prism::fake([
@@ -389,7 +529,7 @@ class EvalFrameworkTest extends DatabaseTestCase
             {
                 $this->callCount++;
                 if ($this->callCount === 1) {
-                    throw new \RuntimeException('Judge exploded');
+                    throw new RuntimeException('Judge exploded');
                 }
 
                 return new AiWorkflowEvalResult(0.8);

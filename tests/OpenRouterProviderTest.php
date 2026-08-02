@@ -17,6 +17,7 @@ use Integrations\Enums\RateLimitWindow;
 use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Exceptions\PrismProviderOverloadedException;
 use Prism\Prism\Exceptions\PrismRateLimitedException;
+use Prism\Prism\Exceptions\PrismRequestTooLargeException;
 use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use RuntimeException;
 
@@ -74,6 +75,7 @@ class OpenRouterProviderTest extends TestCase
 
         $this->assertSame(FailureClass::Throttle, $provider->classifyFailure(PrismRateLimitedException::make()));
         $this->assertSame(FailureClass::Upstream, $provider->classifyFailure(PrismProviderOverloadedException::make('openrouter')));
+        $this->assertSame(FailureClass::Client, $provider->classifyFailure(PrismRequestTooLargeException::make('openrouter')));
         $this->assertSame(FailureClass::Upstream, $provider->classifyFailure(new ConnectionException('network down')));
     }
 

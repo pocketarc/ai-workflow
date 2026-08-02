@@ -15,6 +15,7 @@ use Integrations\RateLimit;
 use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Exceptions\PrismProviderOverloadedException;
 use Prism\Prism\Exceptions\PrismRateLimitedException;
+use Prism\Prism\Exceptions\PrismRequestTooLargeException;
 use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Throwable;
 
@@ -46,6 +47,10 @@ class OpenRouterProvider implements ClassifiesFailures, CustomizesRetry, Declare
             // neither trips nor retries it.
             if ($current instanceof PrismStructuredDecodingException) {
                 return null;
+            }
+
+            if ($current instanceof PrismRequestTooLargeException) {
+                return FailureClass::Client;
             }
 
             if ($current instanceof ConnectionException) {

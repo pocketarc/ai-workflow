@@ -8,12 +8,24 @@ use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use AiWorkflow\PrismExceptionInspector;
 use Illuminate\Support\Facades\Log;
+use Integrations\Contracts\CustomizesRetry;
+use Integrations\Contracts\IntegrationProvider;
+use Integrations\Enums\FailureClass;
+use Integrations\IntegrationManager;
+use Integrations\RetryHandler;
+use Integrations\Support\FailureClassifier;
+use Integrations\Support\ResponseHelper;
 use Prism\Prism\Structured\Response as StructuredResponse;
+use Prism\Prism\Text\Response;
 use Throwable;
 
 class AiWorkflowEvalRunner
 {
+    /** Kept low: every attempt is a paid call, across every item in a run. */
+    private const int DEFAULT_REPLAY_TRIES = 2;
+
     public function __construct(
         private readonly AiWorkflowReplayer $replayer,
     ) {}
@@ -56,7 +68,7 @@ class AiWorkflowEvalRunner
                     // Today's prompt, not the one recorded alongside the answer:
                     // editing a prompt and re-running the golden set is the
                     // regression test this framework exists for.
-                    $response = $this->replayer->replay($request, useCurrentPrompts: true, model: $model);
+                    $response = $this->replay($request, $model);
                     $durationMs = (int) ((hrtime(true) - $startedAt) / 1_000_000);
                     $result = $judge->judge($request, $response);
                 } catch (Throwable $e) {
@@ -108,6 +120,97 @@ class AiWorkflowEvalRunner
         }
 
         return $evalRun->load('scores');
+    }
+
+    /**
+     * Replay one request with the failure classification and retry delay used
+     * for ordinary AI requests.
+     */
+    private function replay(AiWorkflowRequest $request, string $model): Response|StructuredResponse
+    {
+        $attempts = config('ai-workflow.eval.replay_tries');
+        $attempts = is_int($attempts) && $attempts > 0 ? $attempts : self::DEFAULT_REPLAY_TRIES;
+        $provider = $this->providerForModel($model);
+
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                return $this->replayer->replay($request, useCurrentPrompts: true, model: $model);
+            } catch (Throwable $error) {
+                if ($attempt >= $attempts || ! $this->isRetryable($error, $provider)) {
+                    throw $error;
+                }
+
+                $delayMs = $this->retryDelayMs($error, $attempt, $provider);
+
+                Log::warning('AiWorkflow: Eval replay failed, retrying', [
+                    'request_id' => $request->id,
+                    'model' => $model,
+                    'attempt' => $attempt,
+                    'retry_delay_ms' => $delayMs,
+                    'error' => $error->getMessage(),
+                ]);
+
+                if ($delayMs > 0) {
+                    usleep($delayMs * 1000);
+                }
+            }
+        }
+    }
+
+    private function isRetryable(Throwable $error, ?IntegrationProvider $provider): bool
+    {
+        if ($provider instanceof CustomizesRetry) {
+            $retryable = $provider->isRetryable($error);
+
+            if ($retryable !== null) {
+                return $retryable;
+            }
+        }
+
+        if (RetryHandler::isRetryable($error)) {
+            return true;
+        }
+
+        $failureClass = FailureClassifier::classify($error, $provider);
+        if ($failureClass !== FailureClass::Unknown) {
+            return $failureClass->isRetryable();
+        }
+
+        $status = PrismExceptionInspector::httpStatus($error);
+
+        return $status !== null && FailureClass::fromStatus($status)->isRetryable();
+    }
+
+    private function retryDelayMs(Throwable $error, int $attempt, ?IntegrationProvider $provider): int
+    {
+        $status = ResponseHelper::extractStatusCode($error) ?? PrismExceptionInspector::httpStatus($error);
+
+        if ($provider instanceof CustomizesRetry) {
+            $delayMs = $provider->retryDelayMs($error, $attempt, $status);
+
+            if ($delayMs !== null) {
+                return $delayMs;
+            }
+        }
+
+        return RetryHandler::calculateDelayMs($error, $attempt);
+    }
+
+    /**
+     * Return the registered integration provider for a valid `provider:model`
+     * identifier. Return null if the identifier is invalid or the provider is
+     * not registered.
+     */
+    private function providerForModel(string $model): ?IntegrationProvider
+    {
+        $parts = explode(':', $model, 2);
+        if (count($parts) !== 2 || $parts[0] === '') {
+            return null;
+        }
+
+        $manager = app(IntegrationManager::class);
+
+        return $manager->has($parts[0]) ? $manager->provider($parts[0]) : null;
     }
 
     /**

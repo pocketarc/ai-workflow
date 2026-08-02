@@ -70,6 +70,14 @@ return [
     // Middleware pipeline — global middleware applied to every AI request.
     'middleware' => [],
 
+    'eval' => [
+        // Set the number of attempts per replay, including the first attempt. If the
+        // integration provider is registered, the runner uses its failure policy to
+        // classify failures and calculate retry delays. Keep this value low because
+        // you pay for one call per item on every attempt.
+        'replay_tries' => 2,
+    ],
+
     // Human review UI (ai-workflow:review). Off unless explicitly enabled, so
     // the routes never answer in a deployed app; the command turns it on for
     // the local server it starts.
