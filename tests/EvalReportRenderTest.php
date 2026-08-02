@@ -8,15 +8,22 @@ use AiWorkflow\Eval\EvalReportRenderer;
 use AiWorkflow\Models\AiWorkflowEvalRun;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
+use AiWorkflow\Tests\Fixtures\StubReviewContext;
 use Illuminate\Support\Facades\File;
 
 class EvalReportRenderTest extends DatabaseTestCase
 {
     public function test_it_renders_a_self_contained_page(): void
     {
+        // A resolver is the only source of external URLs on the page, so the
+        // assertions below check nothing unless one is configured.
+        config(['ai-workflow.review.context' => StubReviewContext::class]);
+
         $run = $this->seedRun();
 
         $html = app(EvalReportRenderer::class)->render($run);
+
+        $this->assertStringContainsString('https://example.test/issues/', $html);
 
         $this->assertStringContainsString('<!DOCTYPE html>', $html);
         $this->assertStringContainsString('Comparison run', $html);
@@ -25,11 +32,14 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringContainsString('openrouter:a', $html);
         $this->assertStringContainsString('openrouter:b', $html);
 
-        // Self-contained: nothing to fetch when the file is opened offline.
+        // Self-contained means the browser fetches nothing when the file is
+        // opened offline. The link asserted above is inert until someone clicks
+        // it, so it does not break that.
         $this->assertStringNotContainsString('<script src=', $html);
-        $this->assertStringNotContainsString('<link rel="stylesheet"', $html);
-        $this->assertStringNotContainsString('http://', $html);
-        $this->assertStringNotContainsString('https://', $html);
+        $this->assertStringNotContainsString('<link rel=', $html);
+        $this->assertStringNotContainsString('src="http', $html);
+        $this->assertStringNotContainsString('url(http', $html);
+        $this->assertStringNotContainsString('@import', $html);
     }
 
     public function test_it_shows_accuracy_and_the_baseline_delta(): void
@@ -77,6 +87,41 @@ class EvalReportRenderTest extends DatabaseTestCase
         // The test above would still pass if the renderer emitted the
         // thought-token line unconditionally.
         $this->assertStringNotContainsString('thought tokens', $html);
+    }
+
+    public function test_it_shows_the_host_apps_context_for_each_decision(): void
+    {
+        config(['ai-workflow.review.context' => StubReviewContext::class]);
+
+        $run = $this->seedRun();
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        // Whoever reads a wrong answer needs the ticket it was about and the
+        // last comment on it. Without those, the drill-down is a label and a
+        // number.
+        $this->assertStringContainsString('GitHub #4821', $html);
+        $this->assertStringContainsString('Last comment before this decision', $html);
+        $this->assertStringContainsString('The import failed again overnight.', $html);
+        $this->assertStringContainsString('<a href="https://example.test/issues/', $html);
+
+        // Blade leaves a directive glued to a word character uncompiled, which
+        // is how the thought-token line broke.
+        $this->assertStringNotContainsString('@if', $html);
+        $this->assertStringNotContainsString('@foreach', $html);
+        $this->assertStringNotContainsString('@endif', $html);
+    }
+
+    public function test_it_renders_without_context_when_the_host_app_configures_none(): void
+    {
+        config(['ai-workflow.review.context' => null]);
+
+        $run = $this->seedRun();
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        $this->assertStringContainsString('Decisions', $html);
+        $this->assertStringNotContainsString('Last comment before this decision', $html);
     }
 
     public function test_it_warns_when_a_model_mostly_failed(): void
