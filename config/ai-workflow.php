@@ -70,6 +70,14 @@ return [
     // Middleware pipeline — global middleware applied to every AI request.
     'middleware' => [],
 
+    'eval' => [
+        // Attempts per replay, counting the first. A provider that cannot
+        // classify its own response often succeeds on a second try, but every
+        // attempt is a paid call on every item in a run, so keep this low.
+        // A 4xx is never retried: the provider rejected the request itself.
+        'replay_tries' => 2,
+    ],
+
     // Human review UI (ai-workflow:review). Off unless explicitly enabled, so
     // the routes never answer in a deployed app; the command turns it on for
     // the local server it starts.

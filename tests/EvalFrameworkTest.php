@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Tests;
 
+use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Eval\AiJudge;
 use AiWorkflow\Eval\AiWorkflowEvalJudge;
 use AiWorkflow\Eval\AiWorkflowEvalResult;
@@ -14,7 +15,9 @@ use AiWorkflow\Models\AiWorkflowRequest;
 use Illuminate\Database\Eloquent\JsonEncodingException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
+use Mockery\MockInterface;
 use Prism\Prism\Enums\FinishReason;
+use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Testing\StructuredResponseFake;
@@ -365,6 +368,77 @@ class EvalFrameworkTest extends DatabaseTestCase
         );
 
         $this->assertSame(['tag' => 'classification'], $evalRun->config);
+    }
+
+    public function test_eval_runner_retries_a_replay_the_provider_fumbled(): void
+    {
+        $attempts = 0;
+
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock) use (&$attempts): void {
+            $mock->shouldReceive('replay')->twice()->andReturnUsing(function () use (&$attempts): Response {
+                $attempts++;
+
+                // A response the provider could not classify. Generation is
+                // non-deterministic, so the next sample usually lands.
+                if ($attempts === 1) {
+                    throw new PrismException('OpenRouter: unknown finish reason');
+                }
+
+                return $this->makeTextResponse('Second time lucky');
+            });
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Retry eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame('Second time lucky', $score->response_text);
+        $this->assertNull($score->details['error'] ?? null);
+    }
+
+    public function test_eval_runner_gives_up_after_the_configured_attempts(): void
+    {
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('replay')->twice()->andThrow(new PrismException('OpenRouter: unknown finish reason'));
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Exhausted eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame(0.0, (float) $score->score);
+        $this->assertStringContainsString('unknown finish reason', (string) ($score->details['error'] ?? ''));
+    }
+
+    public function test_eval_runner_does_not_retry_a_request_the_provider_rejected(): void
+    {
+        $rejected = new PrismException('OpenRouter: No allowed providers are available for the selected model.');
+        $rejected->httpStatus = 404;
+
+        // A 4xx fails the same way every time, so a second attempt only spends
+        // money to reach the same score.
+        $this->mock(AiWorkflowReplayer::class, function (MockInterface $mock) use ($rejected): void {
+            $mock->shouldReceive('replay')->once()->andThrow($rejected);
+        });
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Rejected eval',
+            requests: [$this->createTextRequest()],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $this->assertSame(0.0, (float) ($evalRun->scores->first()?->score ?? -1.0));
     }
 
     public function test_eval_runner_handles_partial_failure(): void
