@@ -40,7 +40,10 @@ class ReviewContext
         }
 
         if (! self::isSafeScheme($link['url'])) {
-            throw new LogicException('Review context link URLs must be http, https or relative, got '.$link['url'].'.');
+            // The rejected URL is left out on purpose. It is resolver-supplied,
+            // it reaches a log through report(), and a newline in it would
+            // forge entries there. Its query string may also hold credentials.
+            throw new LogicException('Review context link URLs must be http, https or relative, and must not contain control characters.');
         }
     }
 

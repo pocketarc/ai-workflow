@@ -50,6 +50,24 @@ class ReviewContextTest extends DatabaseTestCase
         new ReviewContext(links: [['label' => 'Looks fine', 'url' => $url]]);
     }
 
+    public function test_it_keeps_a_rejected_url_out_of_the_exception_message(): void
+    {
+        // The message is reported, and report() writes to a log where a
+        // newline in resolver-supplied text would start a forged entry.
+        try {
+            new ReviewContext(links: [[
+                'label' => 'Looks fine',
+                'url' => "javascript:alert(1)\nWARNING: nothing to see here",
+            ]]);
+
+            $this->fail('Expected the unsafe URL to be rejected.');
+        } catch (LogicException $e) {
+            $this->assertStringNotContainsString('javascript', $e->getMessage());
+            $this->assertStringNotContainsString('nothing to see here', $e->getMessage());
+            $this->assertStringNotContainsString("\n", $e->getMessage());
+        }
+    }
+
     /**
      * @return list<array{string}>
      */
