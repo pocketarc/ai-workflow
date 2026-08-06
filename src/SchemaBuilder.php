@@ -50,10 +50,20 @@ class SchemaBuilder
             $type = $param->getType();
             $description = self::getDescription($param);
 
-            [$schema, $nullable] = self::resolveType($type, $name, $description, $param);
+            [$schema] = self::resolveType($type, $name, $description, $param);
             $properties[] = $schema;
 
-            if (! $param->isDefaultValueAvailable() && ! $nullable) {
+            // In strict mode, the OpenAI API rejects any schema that lists a key in `properties`
+            // but not in `required`. So the builder lists a property in `required` whenever
+            // listing it cannot change the value the caller ends up with: when it has no default,
+            // because there is nothing to fall back on, and when its default is null, because
+            // LaravelData hydrates both a returned null and an absent key to null.
+            //
+            // That leaves properties with a non-null default. Listing one of those would make the
+            // model always supply a value, so PHP would never apply the default. The API still
+            // rejects a schema built from a class that has one; to avoid that, declare the default
+            // as null.
+            if (! $param->isDefaultValueAvailable() || $param->getDefaultValue() === null) {
                 $requiredFields[] = $name;
             }
         }

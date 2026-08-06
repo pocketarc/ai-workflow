@@ -10,6 +10,7 @@ use AiWorkflow\PromptData;
 use AiWorkflow\SchemaBuilder;
 use AiWorkflow\StructuredDataResult;
 use AiWorkflow\Tests\Fixtures\Data\AddressData;
+use AiWorkflow\Tests\Fixtures\Data\DefaultedData;
 use AiWorkflow\Tests\Fixtures\Data\PersonData;
 use AiWorkflow\Tests\Fixtures\Data\SentimentData;
 use AiWorkflow\Tests\Fixtures\Data\TeamData;
@@ -88,12 +89,41 @@ class SchemaBuilderTest extends TestCase
         $this->assertSame(['positive', 'negative', 'neutral'], $schema->properties[0]->options);
     }
 
-    public function test_nullable_property_not_required(): void
+    public function test_nullable_property_is_still_required(): void
     {
         $schema = SchemaBuilder::fromDataClass(TypedSentimentData::class);
 
-        // 'type' is required, 'reason' is nullable with default — not required
-        $this->assertSame(['type'], $schema->requiredFields);
+        // LaravelData hydrates a returned null and an absent key the same way, so listing nullable
+        // `reason` in `required` costs its default nothing.
+        $this->assertSame(['type', 'reason'], $schema->requiredFields);
+    }
+
+    public function test_required_lists_every_property_when_none_has_a_non_null_default(): void
+    {
+        foreach ([SentimentData::class, PersonData::class, TeamData::class, TypedSentimentData::class] as $dataClass) {
+            $schema = SchemaBuilder::fromDataClass($dataClass);
+            $propertyNames = array_map(fn ($property) => $property->name(), $schema->properties);
+
+            $this->assertSame($propertyNames, $schema->requiredFields, "{$dataClass} declares no non-null default, so required must list every key in properties");
+        }
+    }
+
+    public function test_property_with_a_non_null_default_stays_optional(): void
+    {
+        $schema = SchemaBuilder::fromDataClass(DefaultedData::class);
+
+        $this->assertSame(['sentiment', 'reason'], $schema->requiredFields);
+    }
+
+    public function test_nested_object_required_lists_every_property(): void
+    {
+        $schema = SchemaBuilder::fromDataClass(PersonData::class);
+
+        /** @var ObjectSchema $addressSchema */
+        $addressSchema = $schema->properties[2];
+        $propertyNames = array_map(fn ($property) => $property->name(), $addressSchema->properties);
+
+        $this->assertSame($propertyNames, $addressSchema->requiredFields);
     }
 
     public function test_nullable_property_sets_nullable_flag(): void
