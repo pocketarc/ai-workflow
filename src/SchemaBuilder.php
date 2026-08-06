@@ -54,18 +54,11 @@ class SchemaBuilder
             $properties[] = $schema;
 
             // In strict mode, the OpenAI API rejects any schema that lists a key in `properties`
-            // but not in `required`. So the builder lists a property in `required` whenever
-            // listing it cannot change the value the caller ends up with: when it has no default,
-            // because there is nothing to fall back on, and when its default is null, because
-            // LaravelData hydrates both a returned null and an absent key to null.
-            //
-            // That leaves properties with a non-null default. Listing one of those would make the
-            // model always supply a value, so PHP would never apply the default. The API still
-            // rejects a schema built from a class that has one; to avoid that, declare the default
-            // as null.
-            if (! $param->isDefaultValueAvailable() || $param->getDefaultValue() === null) {
-                $requiredFields[] = $name;
-            }
+            // but not in `required`, so every property goes in the list. A property that declares
+            // a default also accepts null, which is how the model says it has no value for that
+            // key. Pass the response through stripNullsForDefaultedProperties() before hydrating
+            // it, and PHP applies the default instead.
+            $requiredFields[] = $name;
         }
 
         return new ObjectSchema(
@@ -74,6 +67,48 @@ class SchemaBuilder
             properties: $properties,
             requiredFields: $requiredFields,
         );
+    }
+
+    /**
+     * Drop the nulls a model returned for properties that declare a default.
+     *
+     * Every property is required, so a model with no value for a defaulted property returns null
+     * rather than leaving the key out. Removing the key is what lets PHP apply the default, and it
+     * is also the only way a non-nullable property such as `string $language = 'en'` survives:
+     * LaravelData throws a TypeError on a null for it.
+     *
+     * `sendStructuredData()` calls this. Call it yourself when you hydrate the structured response
+     * from `sendStructuredMessages()`.
+     *
+     * @param  class-string<Data>  $dataClass
+     * @param  array<mixed>|null  $structured
+     * @return array<mixed>|null
+     */
+    public static function stripNullsForDefaultedProperties(string $dataClass, ?array $structured): ?array
+    {
+        if ($structured === null) {
+            return null;
+        }
+
+        $constructor = (new ReflectionClass($dataClass))->getConstructor();
+
+        if ($constructor === null) {
+            return $structured;
+        }
+
+        foreach ($constructor->getParameters() as $param) {
+            $name = $param->getName();
+
+            if (! $param->isDefaultValueAvailable()) {
+                continue;
+            }
+
+            if (array_key_exists($name, $structured) && $structured[$name] === null) {
+                unset($structured[$name]);
+            }
+        }
+
+        return $structured;
     }
 
     /**
@@ -114,6 +149,10 @@ class SchemaBuilder
         }
 
         $nullable = $nullable || $namedType->allowsNull();
+
+        // A property that declares a default is one the model may leave unanswered, and strict
+        // mode has no way to leave a key out. Widening the type gives the model a null to return.
+        $nullable = $nullable || ($param !== null && $param->isDefaultValueAvailable());
 
         $schema = self::mapNamedType($namedType->getName(), $name, $description, $nullable, $param);
 

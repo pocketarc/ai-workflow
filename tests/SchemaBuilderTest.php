@@ -11,6 +11,7 @@ use AiWorkflow\SchemaBuilder;
 use AiWorkflow\StructuredDataResult;
 use AiWorkflow\Tests\Fixtures\Data\AddressData;
 use AiWorkflow\Tests\Fixtures\Data\DefaultedData;
+use AiWorkflow\Tests\Fixtures\Data\NullableNoDefaultData;
 use AiWorkflow\Tests\Fixtures\Data\PersonData;
 use AiWorkflow\Tests\Fixtures\Data\SentimentData;
 use AiWorkflow\Tests\Fixtures\Data\TeamData;
@@ -98,21 +99,69 @@ class SchemaBuilderTest extends TestCase
         $this->assertSame(['type', 'reason'], $schema->requiredFields);
     }
 
-    public function test_required_lists_every_property_when_none_has_a_non_null_default(): void
+    public function test_required_lists_every_property(): void
     {
-        foreach ([SentimentData::class, PersonData::class, TeamData::class, TypedSentimentData::class] as $dataClass) {
+        foreach ([SentimentData::class, PersonData::class, TeamData::class, TypedSentimentData::class, DefaultedData::class] as $dataClass) {
             $schema = SchemaBuilder::fromDataClass($dataClass);
             $propertyNames = array_map(fn ($property) => $property->name(), $schema->properties);
 
-            $this->assertSame($propertyNames, $schema->requiredFields, "{$dataClass} declares no non-null default, so required must list every key in properties");
+            $this->assertSame($propertyNames, $schema->requiredFields, "required for {$dataClass} must list every key in properties (OpenAI strict mode)");
         }
     }
 
-    public function test_property_with_a_non_null_default_stays_optional(): void
+    public function test_defaulted_property_is_nullable_so_the_model_can_decline(): void
     {
         $schema = SchemaBuilder::fromDataClass(DefaultedData::class);
+        $array = $schema->toArray();
 
-        $this->assertSame(['sentiment', 'reason'], $schema->requiredFields);
+        // 'language' is a non-nullable PHP string, but its default needs a null to fall back on.
+        $this->assertSame(['string', 'null'], $array['properties']['language']['type']);
+        $this->assertSame(['string', 'null'], $array['properties']['tone']['type']);
+        $this->assertSame('string', $array['properties']['sentiment']['type']);
+    }
+
+    public function test_strip_nulls_restores_defaults(): void
+    {
+        $stripped = SchemaBuilder::stripNullsForDefaultedProperties(DefaultedData::class, [
+            'sentiment' => 'positive',
+            'reason' => null,
+            'language' => null,
+            'tone' => null,
+        ]);
+
+        $this->assertSame(['sentiment' => 'positive'], $stripped);
+
+        $data = DefaultedData::from($stripped);
+        $this->assertSame('en', $data->language);
+        $this->assertSame('neutral', $data->tone);
+        $this->assertNull($data->reason);
+    }
+
+    public function test_strip_nulls_keeps_values_the_model_supplied(): void
+    {
+        $stripped = SchemaBuilder::stripNullsForDefaultedProperties(DefaultedData::class, [
+            'sentiment' => 'negative',
+            'reason' => 'late delivery',
+            'language' => 'fr',
+            'tone' => 'sharp',
+        ]);
+
+        $data = DefaultedData::from($stripped);
+        $this->assertSame('fr', $data->language);
+        $this->assertSame('sharp', $data->tone);
+        $this->assertSame('late delivery', $data->reason);
+    }
+
+    public function test_strip_nulls_leaves_a_nullable_property_without_a_default(): void
+    {
+        // 'category_id' has no default, so its null is the model's answer, not a decline.
+        $stripped = SchemaBuilder::stripNullsForDefaultedProperties(NullableNoDefaultData::class, [
+            'category_id' => null,
+            'confidence' => 0,
+        ]);
+
+        $this->assertArrayHasKey('category_id', $stripped);
+        $this->assertNull(NullableNoDefaultData::from($stripped)->category_id);
     }
 
     public function test_nested_object_required_lists_every_property(): void

@@ -441,7 +441,9 @@ class AiService
 
             try {
                 /** @var T */
-                $data = $dataClass::from($response->structured);
+                $data = $dataClass::from(
+                    SchemaBuilder::stripNullsForDefaultedProperties($dataClass, $response->structured)
+                );
 
                 return new StructuredDataResult($data, $response, $response->usage);
             } catch (Throwable $e) {
