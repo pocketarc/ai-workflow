@@ -53,11 +53,7 @@ class SchemaBuilder
             [$schema] = self::resolveType($type, $name, $description, $param);
             $properties[] = $schema;
 
-            // In strict mode, the OpenAI API rejects any schema that lists a key in `properties`
-            // but not in `required`, so every property goes in the list. A property that declares
-            // a default also accepts null, which is how the model says it has no value for that
-            // key. Pass the response through stripNullsForDefaultedProperties() before hydrating
-            // it, and PHP applies the default instead.
+            // Strict mode rejects a schema that lists a key in `properties` but not in `required`.
             $requiredFields[] = $name;
         }
 
@@ -70,15 +66,9 @@ class SchemaBuilder
     }
 
     /**
-     * Drop the nulls a model returned for properties that declare a default.
-     *
-     * Every property is required, so a model with no value for a defaulted property returns null
-     * rather than leaving the key out. Removing the key is what lets PHP apply the default, and it
-     * is also the only way a non-nullable property such as `string $language = 'en'` survives:
-     * LaravelData throws a TypeError on a null for it.
-     *
-     * `sendStructuredData()` calls this. Call it yourself when you hydrate the structured response
-     * from `sendStructuredMessages()`.
+     * Drop the nulls a model returned for properties that declare a default, so PHP applies the
+     * default. `sendStructuredData()` calls this; call it yourself if you hydrate the structured
+     * response from `sendStructuredMessages()`.
      *
      * @param  class-string<Data>  $dataClass
      * @param  array<mixed>|null  $structured
@@ -150,8 +140,7 @@ class SchemaBuilder
 
         $nullable = $nullable || $namedType->allowsNull();
 
-        // A property that declares a default is one the model may leave unanswered, and strict
-        // mode has no way to leave a key out. Widening the type gives the model a null to return.
+        // Strict mode cannot leave a key out, so a defaulted property needs a null to return.
         $nullable = $nullable || ($param !== null && $param->isDefaultValueAvailable());
 
         $schema = self::mapNamedType($namedType->getName(), $name, $description, $nullable, $param);

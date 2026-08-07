@@ -94,8 +94,6 @@ class SchemaBuilderTest extends TestCase
     {
         $schema = SchemaBuilder::fromDataClass(TypedSentimentData::class);
 
-        // LaravelData hydrates a returned null and an absent key the same way, so listing nullable
-        // `reason` in `required` costs its default nothing.
         $this->assertSame(['type', 'reason'], $schema->requiredFields);
     }
 
@@ -114,7 +112,7 @@ class SchemaBuilderTest extends TestCase
         $schema = SchemaBuilder::fromDataClass(DefaultedData::class);
         $array = $schema->toArray();
 
-        // 'language' is a non-nullable PHP string, but its default needs a null to fall back on.
+        // 'language' is a non-nullable PHP string, widened so its default has a null to fall back on.
         $this->assertSame(['string', 'null'], $array['properties']['language']['type']);
         $this->assertSame(['string', 'null'], $array['properties']['tone']['type']);
         $this->assertSame('string', $array['properties']['sentiment']['type']);
@@ -154,7 +152,7 @@ class SchemaBuilderTest extends TestCase
 
     public function test_strip_nulls_leaves_a_nullable_property_without_a_default(): void
     {
-        // 'category_id' has no default, so its null is the model's answer, not a decline.
+        // No default, so the null is the model's answer rather than a decline.
         $stripped = SchemaBuilder::stripNullsForDefaultedProperties(NullableNoDefaultData::class, [
             'category_id' => null,
             'confidence' => 0,
