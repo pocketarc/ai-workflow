@@ -89,16 +89,89 @@ class SchemaBuilder
         foreach ($constructor->getParameters() as $param) {
             $name = $param->getName();
 
-            if (! $param->isDefaultValueAvailable()) {
+            if (! array_key_exists($name, $structured)) {
                 continue;
             }
 
-            if (array_key_exists($name, $structured) && $structured[$name] === null) {
-                unset($structured[$name]);
+            $value = $structured[$name];
+
+            if ($value === null) {
+                if ($param->isDefaultValueAvailable()) {
+                    unset($structured[$name]);
+                }
+
+                continue;
             }
+
+            // Nested schemas widen their own defaulted properties, so their nulls need the same
+            // treatment before the nested constructor sees them.
+            $nested = self::nestedDataClass($param);
+
+            if ($nested === null || ! is_array($value)) {
+                continue;
+            }
+
+            [$nestedClass, $isList] = $nested;
+
+            if (! $isList) {
+                $structured[$name] = self::stripNullsForDefaultedProperties($nestedClass, $value);
+
+                continue;
+            }
+
+            foreach ($value as $index => $item) {
+                if (is_array($item)) {
+                    $value[$index] = self::stripNullsForDefaultedProperties($nestedClass, $item);
+                }
+            }
+
+            $structured[$name] = $value;
         }
 
         return $structured;
+    }
+
+    /**
+     * The Data class behind a property, if it holds one or a list of them.
+     *
+     * @return array{class-string<Data>, bool}|null [data class, whether the property holds a list]
+     */
+    private static function nestedDataClass(ReflectionParameter $param): ?array
+    {
+        $type = $param->getType();
+        $namedType = $type;
+
+        if ($type instanceof ReflectionUnionType) {
+            $namedType = null;
+
+            foreach ($type->getTypes() as $unionMember) {
+                if ($unionMember instanceof ReflectionNamedType && $unionMember->getName() !== 'null') {
+                    $namedType = $unionMember;
+
+                    break;
+                }
+            }
+        }
+
+        if (! $namedType instanceof ReflectionNamedType) {
+            return null;
+        }
+
+        if ($namedType->getName() !== 'array') {
+            $typeName = $namedType->getName();
+
+            return is_subclass_of($typeName, Data::class) ? [$typeName, false] : null;
+        }
+
+        $attributes = $param->getAttributes(ArrayItemType::class);
+
+        if ($attributes === []) {
+            return null;
+        }
+
+        $itemType = $attributes[0]->newInstance()->type;
+
+        return is_subclass_of($itemType, Data::class) ? [$itemType, true] : null;
     }
 
     /**

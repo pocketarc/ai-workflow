@@ -11,6 +11,7 @@ use AiWorkflow\SchemaBuilder;
 use AiWorkflow\StructuredDataResult;
 use AiWorkflow\Tests\Fixtures\Data\AddressData;
 use AiWorkflow\Tests\Fixtures\Data\DefaultedData;
+use AiWorkflow\Tests\Fixtures\Data\NestedDefaultsData;
 use AiWorkflow\Tests\Fixtures\Data\NullableNoDefaultData;
 use AiWorkflow\Tests\Fixtures\Data\PersonData;
 use AiWorkflow\Tests\Fixtures\Data\SentimentData;
@@ -148,6 +149,57 @@ class SchemaBuilderTest extends TestCase
         $this->assertSame('fr', $data->language);
         $this->assertSame('sharp', $data->tone);
         $this->assertSame('late delivery', $data->reason);
+    }
+
+    public function test_strip_nulls_recurses_into_nested_data(): void
+    {
+        $stripped = SchemaBuilder::stripNullsForDefaultedProperties(NestedDefaultsData::class, [
+            'name' => 'Jane',
+            'address' => ['street' => 'Main St', 'country' => null],
+            'previous' => [['street' => 'Old Rd', 'country' => null]],
+        ]);
+
+        $data = NestedDefaultsData::from($stripped);
+
+        $this->assertSame('UK', $data->address->country);
+        $this->assertSame('UK', $data->previous[0]->country);
+    }
+
+    public function test_strip_nulls_keeps_nested_values_the_model_supplied(): void
+    {
+        $stripped = SchemaBuilder::stripNullsForDefaultedProperties(NestedDefaultsData::class, [
+            'name' => 'Jane',
+            'address' => ['street' => 'Main St', 'country' => 'FR'],
+            'previous' => [['street' => 'Old Rd', 'country' => 'DE']],
+        ]);
+
+        $data = NestedDefaultsData::from($stripped);
+
+        $this->assertSame('FR', $data->address->country);
+        $this->assertSame('DE', $data->previous[0]->country);
+    }
+
+    public function test_send_structured_data_applies_nested_defaults(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured([
+                    'name' => 'Jane',
+                    'address' => ['street' => 'Main St', 'country' => null],
+                    'previous' => [['street' => 'Old Rd', 'country' => null]],
+                ])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $result = $service->sendStructuredData(
+            collect([new UserMessage('Where does Jane live?')]),
+            new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Extract the address.'),
+            NestedDefaultsData::class,
+        );
+
+        $this->assertSame('UK', $result->data->address->country);
+        $this->assertSame('UK', $result->data->previous[0]->country);
     }
 
     public function test_strip_nulls_leaves_a_nullable_property_without_a_default(): void
