@@ -45,17 +45,22 @@ class GoldenSetAssembler
             $query->whereRelation('request', 'prompt_id', $promptId);
         }
 
-        $annotations = $query->get();
-
-        // Filtered before the limit is applied, so --corrections --limit=20
-        // yields twenty corrections rather than whatever survives the newest
-        // twenty answers.
-        if ($correctionsOnly) {
-            $annotations = $this->corrections($annotations);
+        // Without the corrections filter the database can do the limiting.
+        // With it, which rows survive is only known once they are in memory, so
+        // the limit has to wait for them: --corrections --limit=20 should yield
+        // twenty corrections, not whatever survives the newest twenty answers.
+        if ($limit !== null && ! $correctionsOnly) {
+            $query->limit($limit);
         }
 
-        if ($limit !== null) {
-            $annotations = $annotations->take($limit);
+        $annotations = $query->get();
+
+        if ($correctionsOnly) {
+            $annotations = $this->corrections($annotations);
+
+            if ($limit !== null) {
+                $annotations = $annotations->take($limit);
+            }
         }
 
         return $this->withGroundTruth($annotations);
