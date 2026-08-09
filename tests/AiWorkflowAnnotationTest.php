@@ -53,6 +53,19 @@ class AiWorkflowAnnotationTest extends DatabaseTestCase
         $this->assertTrue(Schema::hasColumn('ai_workflow_annotations', 'label'));
     }
 
+    public function test_the_request_id_index_survives_the_verdict_drop(): void
+    {
+        // The foreign key on request_id has no index of its own and leans on
+        // this one. Taking the composite index away without leaving something
+        // for it to lean on is refused by MySQL and MariaDB, though not by the
+        // SQLite these tests run on, so this pins the invariant rather than
+        // reproducing the failure.
+        $indexed = collect(Schema::getIndexes('ai_workflow_annotations'))
+            ->contains(static fn (array $index): bool => $index['columns'] === ['request_id']);
+
+        $this->assertTrue($indexed, 'request_id must keep an index for its foreign key.');
+    }
+
     private function makeRequest(): AiWorkflowRequest
     {
         return AiWorkflowRequest::create([
