@@ -9,6 +9,7 @@ use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\Tests\Fixtures\RecordsGroundTruthJudge;
+use InvalidArgumentException;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
@@ -227,6 +228,24 @@ class GoldenSetTest extends DatabaseTestCase
 
         $this->assertCount(1, $scores);
         $this->assertSame($corrected->id, $scores[0]->request_id);
+    }
+
+    public function test_it_rejects_a_limit_below_one(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('must be at least 1, got 0');
+
+        app(GoldenSetAssembler::class)->assemble(limit: 0);
+    }
+
+    public function test_it_rejects_a_negative_limit_when_filtering_corrections(): void
+    {
+        // The corrections path limits with Collection::take(), which reads a
+        // negative as a count from the end and would quietly return the oldest
+        // correction instead of refusing.
+        $this->expectException(InvalidArgumentException::class);
+
+        app(GoldenSetAssembler::class)->assemble(correctionsOnly: true, limit: -1);
     }
 
     private function makeRequest(string $promptId = 'decide_next_action'): AiWorkflowRequest

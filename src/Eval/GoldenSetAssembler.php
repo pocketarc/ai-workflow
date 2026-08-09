@@ -7,6 +7,7 @@ namespace AiWorkflow\Eval;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Illuminate\Support\Collection;
+use InvalidArgumentException;
 
 /**
  * Turns human review answers into an eval golden set.
@@ -25,7 +26,7 @@ class GoldenSetAssembler
      * @param  string|null  $promptId  Restrict to one prompt, or null for all.
      * @param  bool  $correctionsOnly  Keep only the requests whose answer differs
      *                                 from the one the model picked.
-     * @param  int|null  $limit  Cap the set size, newest answer first.
+     * @param  int|null  $limit  Cap the set size, newest answer first. At least 1.
      * @return list<AiWorkflowRequest> Each carrying its answer as a transient
      *                                 ground-truth attribute.
      */
@@ -34,6 +35,14 @@ class GoldenSetAssembler
         bool $correctionsOnly = false,
         ?int $limit = null,
     ): array {
+        // The two limiting paths below disagree about a negative: the query
+        // builder ignores one, while Collection::take() reads it as a count
+        // from the end. Neither is a sensible reading of "cap the set", so
+        // refuse it here rather than let the mode decide what it meant.
+        if ($limit !== null && $limit < 1) {
+            throw new InvalidArgumentException('The golden set limit must be at least 1, got '.$limit.'.');
+        }
+
         $query = AiWorkflowAnnotation::query()
             ->latestPerRequest()
             // No label means no answer to score against.
