@@ -16,26 +16,40 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // The foreign key on request_id has no index of its own. It leans on
+        // the leftmost column of the composite index, and MySQL and MariaDB
+        // refuse to drop an index a constraint still needs:
+        //
+        //   SQLSTATE[HY000]: 1553 Cannot drop index
+        //   'ai_workflow_annotations_request_id_verdict_index': needed in a
+        //   foreign key constraint
+        //
+        // So the key gets an index of its own before the composite goes.
+        // SQLite enforces none of this, which is why the tests below pass
+        // whichever order these run in.
+        Schema::table('ai_workflow_annotations', function (Blueprint $table): void {
+            $table->index('request_id');
+        });
+
         Schema::table('ai_workflow_annotations', function (Blueprint $table): void {
             $table->dropIndex(['request_id', 'verdict']);
             $table->dropColumn('verdict');
-
-            // The composite index covered "history for a request"; that lookup
-            // outlives the column it was sharing an index with.
-            $table->index('request_id');
         });
     }
 
     public function down(): void
     {
         Schema::table('ai_workflow_annotations', function (Blueprint $table): void {
-            $table->dropIndex(['request_id']);
-
             // Every restored row takes the default, because no verdict can be
             // recovered: compare a label to its request's recorded pick to tell
             // an approval from a correction.
             $table->string('verdict')->default('up');
             $table->index(['request_id', 'verdict']);
+        });
+
+        // Dropped last, for the same reason it was added first.
+        Schema::table('ai_workflow_annotations', function (Blueprint $table): void {
+            $table->dropIndex(['request_id']);
         });
     }
 };
