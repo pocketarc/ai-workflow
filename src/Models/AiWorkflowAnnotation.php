@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Models;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Models\Builders\AiWorkflowAnnotationBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,9 +12,9 @@ use Illuminate\Support\Carbon;
 use Override;
 
 /**
- * A human review verdict on a recorded AI request: thumbs up/down, an optional
- * free-text reason, and an optional ground-truth label (e.g. the correct answer
- * for a classification prompt). Feeds the eval golden set.
+ * A human review of a recorded AI request: the answer that was correct for it
+ * (e.g. the right label for a classification prompt), an optional free-text
+ * reason, and who recorded it. Feeds the eval golden set.
  *
  * @method static AiWorkflowAnnotationBuilder<AiWorkflowAnnotation> newModelQuery()
  * @method static AiWorkflowAnnotationBuilder<AiWorkflowAnnotation> newQuery()
@@ -23,7 +22,6 @@ use Override;
  *
  * @property int $id
  * @property int $request_id
- * @property AnnotationVerdict $verdict
  * @property string|null $label
  * @property string|null $reason
  * @property string|null $reviewer
@@ -33,7 +31,6 @@ use Override;
  * @property-read AiWorkflowRequest $request
  *
  * @method static AiWorkflowAnnotationBuilder<static>|AiWorkflowAnnotation latestPerRequest()
- * @method static AiWorkflowAnnotationBuilder<static>|AiWorkflowAnnotation withVerdict(AnnotationVerdict $verdict)
  *
  * @mixin \Eloquent
  */
@@ -43,7 +40,6 @@ class AiWorkflowAnnotation extends Model
 
     protected $fillable = [
         'request_id',
-        'verdict',
         'label',
         'reason',
         'reviewer',
@@ -57,7 +53,6 @@ class AiWorkflowAnnotation extends Model
     protected function casts(): array
     {
         return [
-            'verdict' => AnnotationVerdict::class,
             'metadata' => 'array',
         ];
     }

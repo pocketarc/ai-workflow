@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Tests;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Eval\StructuredResponsePresenter;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowRequest;
@@ -36,68 +35,65 @@ class ReviewUiTest extends DatabaseTestCase
             ->assertSee('value="respond_to_customer"', escape: false);
     }
 
-    public function test_a_thumbs_up_records_the_label_as_ground_truth(): void
+    public function test_submitting_the_box_unchanged_records_the_pick_as_the_answer(): void
     {
         $request = $this->makeDecisionRequest();
 
+        // The box starts on the model's own pick, so leaving it alone is how a
+        // reviewer says the model was right.
         $this->post("/ai-workflow/review/{$request->id}/annotate", [
-            'verdict' => 'up',
             'label' => 'respond_to_customer',
             'reason' => 'Customer asked a direct question.',
         ])->assertRedirect();
 
         $annotation = AiWorkflowAnnotation::query()->firstOrFail();
 
-        $this->assertSame(AnnotationVerdict::Up, $annotation->verdict);
         $this->assertSame('respond_to_customer', $annotation->label);
         $this->assertSame('Customer asked a direct question.', $annotation->reason);
         $this->assertSame('bruno', $annotation->reviewer);
     }
 
-    public function test_a_rejection_with_a_correction_records_the_right_answer(): void
+    public function test_a_changed_box_records_the_answer_it_was_changed_to(): void
     {
         $request = $this->makeDecisionRequest();
 
-        // The decision was wrong AND we know what should have happened. That is
-        // both a recorded failure and an answer-key entry.
         $this->post("/ai-workflow/review/{$request->id}/annotate", [
-            'verdict' => 'down',
             'label' => 'wait_for_development_team',
             'reason' => 'Dev work was still outstanding.',
         ])->assertRedirect();
 
         $annotation = AiWorkflowAnnotation::query()->firstOrFail();
 
-        $this->assertSame(AnnotationVerdict::Down, $annotation->verdict);
+        // Recorded verbatim. Nothing compares it to the pick on the way in:
+        // whether it is a correction is worked out when it is read.
         $this->assertSame('wait_for_development_team', $annotation->label);
         $this->assertSame('Dev work was still outstanding.', $annotation->reason);
     }
 
-    public function test_a_rejection_left_unedited_records_no_answer(): void
+    public function test_an_empty_box_records_a_review_with_no_answer(): void
     {
         $request = $this->makeDecisionRequest();
 
-        // The box is pre-filled with the model's own pick. Submitting it
-        // unchanged alongside a rejection would assert that the rejected action
-        // was correct, so the label is dropped instead.
+        // Clearing the box is how a reviewer says they looked and could not
+        // settle on an answer. It keeps the request out of the queue without
+        // putting a guess into the answer key.
         $this->post("/ai-workflow/review/{$request->id}/annotate", [
-            'verdict' => 'down',
-            'label' => 'respond_to_customer',
-            'reason' => 'Wrong, but I am not sure what was right.',
+            'label' => '',
+            'reason' => 'Not sure what was right here.',
         ])->assertRedirect();
 
         $annotation = AiWorkflowAnnotation::query()->firstOrFail();
 
-        $this->assertSame(AnnotationVerdict::Down, $annotation->verdict);
         $this->assertNull($annotation->label);
+        $this->assertSame('Not sure what was right here.', $annotation->reason);
     }
 
-    public function test_it_rejects_an_unknown_verdict(): void
+    public function test_it_rejects_a_label_that_is_too_long(): void
     {
         $request = $this->makeDecisionRequest();
 
-        $this->post("/ai-workflow/review/{$request->id}/annotate", ['verdict' => 'sideways'])
-            ->assertSessionHasErrors('verdict');
+        $this->post("/ai-workflow/review/{$request->id}/annotate", ['label' => str_repeat('a', 256)])
+            ->assertSessionHasErrors('label');
 
         $this->assertSame(0, AiWorkflowAnnotation::query()->count());
     }
@@ -110,7 +106,6 @@ class ReviewUiTest extends DatabaseTestCase
 
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'respond_to_customer',
         ]);
 
@@ -128,16 +123,17 @@ class ReviewUiTest extends DatabaseTestCase
             ->assertDontSee("Request #{$other->id}");
     }
 
-    public function test_a_relabelled_request_shows_its_latest_verdict(): void
+    public function test_a_relabelled_request_shows_its_latest_answer(): void
     {
         $request = $this->makeDecisionRequest();
 
-        AiWorkflowAnnotation::create(['request_id' => $request->id, 'verdict' => AnnotationVerdict::Up]);
-        AiWorkflowAnnotation::create(['request_id' => $request->id, 'verdict' => AnnotationVerdict::Down]);
+        AiWorkflowAnnotation::create(['request_id' => $request->id, 'label' => 'close_ticket']);
+        AiWorkflowAnnotation::create(['request_id' => $request->id, 'label' => 'wait_for_customer']);
 
         $this->get('/ai-workflow/review?all=1')
             ->assertOk()
-            ->assertSee('last verdict:');
+            ->assertSee('last answer:')
+            ->assertSee('wait_for_customer');
     }
 
     public function test_it_renders_context_supplied_by_the_host_app(): void

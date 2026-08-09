@@ -4,16 +4,13 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Http\Controllers;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Eval\ReviewContextLookup;
-use AiWorkflow\Eval\StructuredResponsePresenter;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
-use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\InputBag;
 
@@ -110,49 +107,27 @@ class ReviewController
     public function annotate(Request $request, AiWorkflowRequest $aiWorkflowRequest): RedirectResponse
     {
         $request->validate([
-            'verdict' => ['required', Rule::enum(AnnotationVerdict::class)],
             'label' => ['nullable', 'string', 'max:255'],
             'reason' => ['nullable', 'string', 'max:5000'],
         ]);
 
-        $verdict = AnnotationVerdict::from($this->stringFrom($request->request, 'verdict') ?? '');
+        $label = $this->stringFrom($request->request, 'label');
 
         AiWorkflowAnnotation::create([
             'request_id' => $aiWorkflowRequest->id,
-            'verdict' => $verdict,
-            'label' => $this->resolveLabel($request, $aiWorkflowRequest, $verdict),
+            'label' => $label,
             'reason' => $this->stringFrom($request->request, 'reason'),
             'reviewer' => $this->reviewer(),
         ]);
 
-        return redirect()
-            ->back()
-            ->with('status', "Recorded {$verdict->value} for request #{$aiWorkflowRequest->id}.");
-    }
+        // An empty box is a review too: it records that the request was looked
+        // at and no answer was settled on, which keeps it out of the queue
+        // without putting a guess into the answer key.
+        $status = $label === null
+            ? "Recorded no answer for request #{$aiWorkflowRequest->id}."
+            : "Recorded {$label} for request #{$aiWorkflowRequest->id}.";
 
-    /**
-     * The correct answer for this request, which is separate from whether the
-     * model got it right.
-     *
-     * A rejection is worth far more when it says what should have happened —
-     * that is both a recorded failure and an answer-key entry. But the answer
-     * box is pre-filled with the model's own pick, so a rejection left
-     * untouched would otherwise record that pick as correct and contradict
-     * itself. An unedited box on a thumbs-down therefore means "wrong, and I am
-     * not saying what was right".
-     */
-    private function resolveLabel(Request $request, AiWorkflowRequest $aiWorkflowRequest, AnnotationVerdict $verdict): ?string
-    {
-        $label = $this->stringFrom($request->request, 'label');
-
-        if ($label === null || $verdict === AnnotationVerdict::Up) {
-            return $label;
-        }
-
-        $structured = $aiWorkflowRequest->structured_response;
-        $chosen = is_array($structured) ? StructuredResponsePresenter::topKey($structured) : null;
-
-        return $label === $chosen ? null : $label;
+        return redirect()->back()->with('status', $status);
     }
 
     private function reviewer(): ?string

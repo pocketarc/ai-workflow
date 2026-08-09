@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Tests;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowEvalDataset;
 use AiWorkflow\Models\AiWorkflowEvalDatasetEntry;
@@ -34,7 +33,6 @@ class PruneCommandTest extends DatabaseTestCase
         $request = $this->makeRequest(daysOld: 120);
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'respond_to_customer',
         ]);
 
@@ -83,7 +81,6 @@ class PruneCommandTest extends DatabaseTestCase
         $request = $this->makeRequest(daysOld: 120, executionId: $annotated->id);
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'close_ticket',
         ]);
 

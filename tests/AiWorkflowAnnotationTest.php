@@ -4,26 +4,24 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Tests;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowRequest;
+use Illuminate\Support\Facades\Schema;
 
 class AiWorkflowAnnotationTest extends DatabaseTestCase
 {
-    public function test_it_persists_a_verdict_label_and_reason(): void
+    public function test_it_persists_a_label_and_reason(): void
     {
         $request = $this->makeRequest();
 
         $annotation = AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'respond_to_customer',
             'reason' => 'Correct call.',
             'reviewer' => 'bruno',
         ])->fresh();
 
         $this->assertNotNull($annotation);
-        $this->assertSame(AnnotationVerdict::Up, $annotation->verdict);
         $this->assertSame('respond_to_customer', $annotation->label);
         $this->assertSame('Correct call.', $annotation->reason);
         $this->assertSame('bruno', $annotation->reviewer);
@@ -34,10 +32,9 @@ class AiWorkflowAnnotationTest extends DatabaseTestCase
     {
         $request = $this->makeRequest();
 
-        AiWorkflowAnnotation::create(['request_id' => $request->id, 'verdict' => AnnotationVerdict::Down]);
+        AiWorkflowAnnotation::create(['request_id' => $request->id, 'label' => 'respond_to_customer']);
         $latest = AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'close_ticket',
         ]);
 
@@ -47,25 +44,13 @@ class AiWorkflowAnnotationTest extends DatabaseTestCase
         $this->assertTrue($latest->is($rows->first()));
     }
 
-    public function test_verdict_filter_composes_with_latest_per_request(): void
+    public function test_the_verdict_column_is_gone(): void
     {
-        // Request A: latest verdict is up.
-        $requestA = $this->makeRequest();
-        AiWorkflowAnnotation::create(['request_id' => $requestA->id, 'verdict' => AnnotationVerdict::Down]);
-        AiWorkflowAnnotation::create(['request_id' => $requestA->id, 'verdict' => AnnotationVerdict::Up]);
-
-        // Request B: started up, later corrected to down — so its current verdict is down.
-        $requestB = $this->makeRequest();
-        AiWorkflowAnnotation::create(['request_id' => $requestB->id, 'verdict' => AnnotationVerdict::Up]);
-        AiWorkflowAnnotation::create(['request_id' => $requestB->id, 'verdict' => AnnotationVerdict::Down]);
-
-        $ups = AiWorkflowAnnotation::query()
-            ->latestPerRequest()
-            ->withVerdict(AnnotationVerdict::Up)
-            ->get();
-
-        $this->assertCount(1, $ups);
-        $this->assertSame($requestA->id, $ups->first()?->request_id);
+        // Dropping it is the point of the migration, and a review records one
+        // thing now. A column left behind would invite something to start
+        // writing to it again.
+        $this->assertFalse(Schema::hasColumn('ai_workflow_annotations', 'verdict'));
+        $this->assertTrue(Schema::hasColumn('ai_workflow_annotations', 'label'));
     }
 
     private function makeRequest(): AiWorkflowRequest

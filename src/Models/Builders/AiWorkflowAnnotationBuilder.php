@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Models\Builders;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 
@@ -17,7 +16,7 @@ class AiWorkflowAnnotationBuilder extends Builder
 {
     /**
      * Keep only the most recent annotation for each request. The latest row
-     * per request is its current verdict/label, so a request can be re-labelled
+     * per request holds its current answer, so a request can be re-labelled
      * without deleting history.
      */
     public function latestPerRequest(): static
@@ -29,13 +28,6 @@ class AiWorkflowAnnotationBuilder extends Builder
                 ->selectRaw('MAX(id)')
                 ->groupBy('request_id');
         });
-
-        return $this;
-    }
-
-    public function withVerdict(AnnotationVerdict $verdict): static
-    {
-        $this->where('verdict', $verdict->value);
 
         return $this;
     }

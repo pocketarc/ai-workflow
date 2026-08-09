@@ -17,6 +17,7 @@ use AiWorkflow\Tests\Fixtures\Data\PersonData;
 use AiWorkflow\Tests\Fixtures\Data\SentimentData;
 use AiWorkflow\Tests\Fixtures\Data\TeamData;
 use AiWorkflow\Tests\Fixtures\Data\TypedSentimentData;
+use AiWorkflow\Tests\Fixtures\Data\ValidatedConfidenceData;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ArraySchema;
@@ -344,6 +345,47 @@ class SchemaBuilderTest extends TestCase
         $this->assertInstanceOf(StructuredDataResult::class, $result);
         $this->assertInstanceOf(SentimentData::class, $result->data);
         $this->assertSame('negative', $result->data->sentiment);
+    }
+
+    public function test_send_structured_data_enforces_validation_rules(): void
+    {
+        Prism::fake([
+            // Out of the range the Data class declares.
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 150])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 85])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $result = $service->sendStructuredData(
+            collect([new UserMessage('How confident are you?')]),
+            new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Answer.'),
+            ValidatedConfidenceData::class,
+        );
+
+        // The first answer is rejected and fed back, so the retry is what lands.
+        $this->assertSame(85, $result->data->confidence);
+    }
+
+    public function test_send_structured_data_throws_when_validation_never_passes(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()->withStructured(['confidence' => 150])->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()->withStructured(['confidence' => 200])->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $this->expectException(StructuredValidationException::class);
+
+        $service = app(AiService::class);
+        $service->sendStructuredData(
+            collect([new UserMessage('How confident are you?')]),
+            new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Answer.'),
+            ValidatedConfidenceData::class,
+            maxAttempts: 2,
+        );
     }
 
     public function test_send_structured_data_throws_after_max_attempts(): void

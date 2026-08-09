@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Tests;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Eval\GoldenSetAssembler;
 use AiWorkflow\Models\AiWorkflowAnnotation;
 use AiWorkflow\Models\AiWorkflowEvalScore;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\Tests\Fixtures\RecordsGroundTruthJudge;
+use InvalidArgumentException;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
@@ -17,12 +17,11 @@ use Prism\Prism\ValueObjects\Usage;
 
 class GoldenSetTest extends DatabaseTestCase
 {
-    public function test_it_collects_thumbs_up_requests_with_their_label(): void
+    public function test_it_collects_answered_requests_with_their_label(): void
     {
         $request = $this->makeRequest();
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'respond_to_customer',
         ]);
 
@@ -36,25 +35,23 @@ class GoldenSetTest extends DatabaseTestCase
         );
     }
 
-    public function test_it_excludes_rejections_that_name_no_answer(): void
+    public function test_it_excludes_reviews_that_name_no_answer(): void
     {
         $request = $this->makeRequest();
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Down,
             'reason' => 'Should have waited.',
         ]);
 
-        // Knowing a decision was wrong gives nothing to score against.
+        // A review that settled on nothing gives nothing to score against.
         $this->assertSame([], app(GoldenSetAssembler::class)->assemble());
     }
 
-    public function test_it_includes_a_rejection_that_supplies_the_right_answer(): void
+    public function test_it_includes_an_answer_that_differs_from_the_pick(): void
     {
         $request = $this->makeRequest();
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Down,
             'label' => 'wait_for_development_team',
             'reason' => 'Dev work outstanding.',
         ]);
@@ -70,39 +67,63 @@ class GoldenSetTest extends DatabaseTestCase
         );
     }
 
-    public function test_a_verdict_filter_narrows_the_set(): void
+    public function test_corrections_keeps_only_answers_that_differ_from_the_pick(): void
     {
-        $approved = $this->makeRequest();
+        // makeRequest records respond_to_customer as the winning action, so an
+        // answer of respond_to_customer agrees with it and close_ticket does not.
+        $agreed = $this->makeRequest();
         AiWorkflowAnnotation::create([
-            'request_id' => $approved->id,
-            'verdict' => AnnotationVerdict::Up,
+            'request_id' => $agreed->id,
             'label' => 'respond_to_customer',
         ]);
 
         $corrected = $this->makeRequest();
         AiWorkflowAnnotation::create([
             'request_id' => $corrected->id,
-            'verdict' => AnnotationVerdict::Down,
             'label' => 'close_ticket',
         ]);
 
         $this->assertCount(2, app(GoldenSetAssembler::class)->assemble());
-        $this->assertCount(1, app(GoldenSetAssembler::class)->assemble(verdict: AnnotationVerdict::Up));
-        $this->assertCount(1, app(GoldenSetAssembler::class)->assemble(verdict: AnnotationVerdict::Down));
+
+        $corrections = app(GoldenSetAssembler::class)->assemble(correctionsOnly: true);
+
+        $this->assertCount(1, $corrections);
+        $this->assertSame($corrected->id, $corrections[0]->id);
     }
 
-    public function test_a_relabelled_request_uses_its_latest_verdict(): void
+    public function test_corrections_are_filtered_before_the_limit_applies(): void
     {
-        // Approved, then corrected to a thumbs-down — it must leave the set.
+        $corrected = $this->makeRequest();
+        AiWorkflowAnnotation::create([
+            'request_id' => $corrected->id,
+            'label' => 'close_ticket',
+        ]);
+
+        // Newer, so it comes first, and it agrees with the pick.
+        $agreed = $this->makeRequest();
+        AiWorkflowAnnotation::create([
+            'request_id' => $agreed->id,
+            'label' => 'respond_to_customer',
+        ]);
+
+        // Limiting first would take the newest answer, drop it for agreeing,
+        // and return nothing at all.
+        $corrections = app(GoldenSetAssembler::class)->assemble(correctionsOnly: true, limit: 1);
+
+        $this->assertCount(1, $corrections);
+        $this->assertSame($corrected->id, $corrections[0]->id);
+    }
+
+    public function test_a_relabelled_request_uses_its_latest_answer(): void
+    {
+        // Answered, then re-reviewed with the answer cleared: it must leave the set.
         $request = $this->makeRequest();
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'close_ticket',
         ]);
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Down,
         ]);
 
         $this->assertSame([], app(GoldenSetAssembler::class)->assemble());
@@ -116,7 +137,6 @@ class GoldenSetTest extends DatabaseTestCase
         foreach ([$decide, $other] as $request) {
             AiWorkflowAnnotation::create([
                 'request_id' => $request->id,
-                'verdict' => AnnotationVerdict::Up,
                 'label' => 'respond_to_customer',
             ]);
         }
@@ -129,7 +149,6 @@ class GoldenSetTest extends DatabaseTestCase
         $extra = $this->makeRequest(promptId: 'decide_next_action');
         AiWorkflowAnnotation::create([
             'request_id' => $extra->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'close_ticket',
         ]);
 
@@ -149,7 +168,6 @@ class GoldenSetTest extends DatabaseTestCase
         $request = $this->makeRequest(promptId: 'decide_next_action');
         AiWorkflowAnnotation::create([
             'request_id' => $request->id,
-            'verdict' => AnnotationVerdict::Up,
             'label' => 'respond_to_customer',
         ]);
 
@@ -181,16 +199,53 @@ class GoldenSetTest extends DatabaseTestCase
             ->assertSuccessful();
     }
 
-    public function test_eval_run_rejects_an_unknown_verdict(): void
+    public function test_eval_run_can_narrow_to_corrections(): void
     {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['close_ticket' => ['likelihood' => 90]])
+                ->withUsage(new Usage(1, 1))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $agreed = $this->makeRequest(promptId: 'decide_next_action');
+        AiWorkflowAnnotation::create(['request_id' => $agreed->id, 'label' => 'respond_to_customer']);
+
+        $corrected = $this->makeRequest(promptId: 'decide_next_action');
+        AiWorkflowAnnotation::create(['request_id' => $corrected->id, 'label' => 'close_ticket']);
+
         $this->artisan('eval:run', [
             '--from-annotations' => true,
-            '--verdict' => 'sideways',
+            '--corrections' => true,
+            '--prompt' => 'decide_next_action',
             '--judge' => RecordsGroundTruthJudge::class,
             '--models' => 'openrouter:model-a',
-        ])
-            ->expectsOutputToContain("Unknown verdict 'sideways'")
-            ->assertFailed();
+        ])->assertSuccessful();
+
+        // Replaying the answers the model already agrees with costs money and
+        // settles nothing, so a corrections run must leave them out.
+        $scores = AiWorkflowEvalScore::query()->get();
+
+        $this->assertCount(1, $scores);
+        $this->assertSame($corrected->id, $scores[0]->request_id);
+    }
+
+    public function test_it_rejects_a_limit_below_one(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('must be at least 1, got 0');
+
+        app(GoldenSetAssembler::class)->assemble(limit: 0);
+    }
+
+    public function test_it_rejects_a_negative_limit_when_filtering_corrections(): void
+    {
+        // The corrections path limits with Collection::take(), which reads a
+        // negative as a count from the end and would quietly return the oldest
+        // correction instead of refusing.
+        $this->expectException(InvalidArgumentException::class);
+
+        app(GoldenSetAssembler::class)->assemble(correctionsOnly: true, limit: -1);
     }
 
     private function makeRequest(string $promptId = 'decide_next_action'): AiWorkflowRequest
@@ -202,7 +257,13 @@ class GoldenSetTest extends DatabaseTestCase
             'model' => 'test-model',
             'system_prompt' => 'Decide.',
             'messages' => [['type' => 'user', 'content' => 'Ticket body']],
-            'structured_response' => ['respond_to_customer' => ['likelihood' => 80, 'reasoning' => 'x']],
+            // Two scored options, because StructuredResponsePresenter treats a
+            // lone one as a coincidence rather than a set of choices and
+            // reports no pick at all.
+            'structured_response' => [
+                'respond_to_customer' => ['likelihood' => 80, 'reasoning' => 'x'],
+                'close_ticket' => ['likelihood' => 10, 'reasoning' => 'y'],
+            ],
             'finish_reason' => 'stop',
             'duration_ms' => 100,
             'schema' => [

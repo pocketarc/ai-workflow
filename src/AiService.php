@@ -440,10 +440,17 @@ class AiService
             $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
 
             try {
+                $payload = SchemaBuilder::stripNullsForDefaultedProperties($dataClass, $response->structured);
+
+                if ($payload === null) {
+                    throw new \RuntimeException('The response carried no structured payload.');
+                }
+
+                // validateAndCreate() rather than from(), so a Data class can state its own rules
+                // (ranges, enums, formats) and have them enforced. from() ignores them. A failure
+                // lands in the catch below and is fed back to the model on the next attempt.
                 /** @var T */
-                $data = $dataClass::from(
-                    SchemaBuilder::stripNullsForDefaultedProperties($dataClass, $response->structured)
-                );
+                $data = $dataClass::validateAndCreate($payload);
 
                 return new StructuredDataResult($data, $response, $response->usage);
             } catch (Throwable $e) {

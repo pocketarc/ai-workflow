@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Console;
 
-use AiWorkflow\Enums\AnnotationVerdict;
 use AiWorkflow\Eval\AiWorkflowEvalJudge;
 use AiWorkflow\Eval\AiWorkflowEvalRunner;
 use AiWorkflow\Eval\GoldenSetAssembler;
@@ -22,7 +21,7 @@ class EvalRunCommand extends Command
         {--run-name= : Name for the eval run (defaults to the source name + timestamp)}
         {--from-annotations : Build the request list from human-labelled requests instead of a dataset}
         {--prompt= : With --from-annotations, restrict to this prompt id}
-        {--verdict= : With --from-annotations, restrict to one verdict (default: every labelled request)}
+        {--corrections : With --from-annotations, keep only the requests whose answer differs from the recorded pick}
         {--limit= : With --from-annotations, cap the number of requests}';
 
     /** @var string */
@@ -90,7 +89,7 @@ class EvalRunCommand extends Command
 
         $datasetName = $this->argument('name');
         if (! is_string($datasetName) || $datasetName === '') {
-            $this->error('A dataset name is required, or use --from-annotations to build the set from review verdicts.');
+            $this->error('A dataset name is required, or use --from-annotations to build the set from review answers.');
 
             return null;
         }
@@ -110,10 +109,7 @@ class EvalRunCommand extends Command
      */
     private function resolveGoldenSet(GoldenSetAssembler $assembler): ?array
     {
-        $verdict = $this->parseVerdict();
-        if ($verdict === false) {
-            return null;
-        }
+        $correctionsOnly = $this->option('corrections') === true;
 
         $promptOption = $this->option('prompt');
         $promptId = is_string($promptOption) && $promptOption !== '' ? $promptOption : null;
@@ -124,36 +120,9 @@ class EvalRunCommand extends Command
         }
 
         return [
-            'label' => 'golden:'.($promptId ?? 'all').($verdict !== null ? ':'.$verdict->value : ''),
-            'requests' => $assembler->assemble($promptId, $verdict, $limit),
+            'label' => 'golden:'.($promptId ?? 'all').($correctionsOnly ? ':corrections' : ''),
+            'requests' => $assembler->assemble($promptId, $correctionsOnly, $limit),
         ];
-    }
-
-    /**
-     * @return AnnotationVerdict|null|false Null for "no verdict filter", false
-     *                                      when the option is not a verdict.
-     */
-    private function parseVerdict(): AnnotationVerdict|null|false
-    {
-        $raw = $this->option('verdict');
-
-        if (! is_string($raw) || $raw === '') {
-            return null;
-        }
-
-        $verdict = AnnotationVerdict::tryFrom($raw);
-
-        if ($verdict === null) {
-            $allowed = implode(', ', array_map(
-                static fn (AnnotationVerdict $case): string => $case->value,
-                AnnotationVerdict::cases(),
-            ));
-            $this->error("Unknown verdict '{$raw}'. Use one of: {$allowed}");
-
-            return false;
-        }
-
-        return $verdict;
     }
 
     /**

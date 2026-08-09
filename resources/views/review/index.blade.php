@@ -1,5 +1,4 @@
 @php
-    use AiWorkflow\Enums\AnnotationVerdict;
     use AiWorkflow\Eval\StructuredResponsePresenter;
 @endphp
 <!DOCTYPE html>
@@ -23,8 +22,8 @@
   .card { border:1px solid var(--line); border-radius:8px; padding:1rem 1.1rem; margin-bottom:1.25rem; }
   .card h2 { font-size:.95rem; margin:0 0 .1rem; }
   .meta { color:var(--muted); font-size:.8rem; margin-bottom:.75rem; }
-  .verdict-up { color:var(--good); font-weight:600; }
-  .verdict-down { color:var(--bad); font-weight:600; }
+  .answered { color:var(--good); font-weight:600; }
+  .unanswered { color:var(--bad); font-weight:600; }
   pre.input { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.7rem .8rem;
               white-space:pre-wrap; word-break:break-word; font-size:.8rem; max-height:16rem; overflow:auto; margin:0; }
   table { border-collapse:collapse; width:100%; font-size:.84rem; margin-top:.5rem; }
@@ -94,9 +93,12 @@
           · <a href="{{ $link['url'] }}" target="_blank" rel="noopener noreferrer">{{ $link['label'] }}</a>
         @endforeach
         @if($latest)
-          · last verdict:
-          <span class="verdict-{{ $latest->verdict->value }}">{{ $latest->verdict->value }}</span>
-          @if($latest->label) ({{ $latest->label }}) @endif
+          · last answer:
+          @if($latest->label)
+            <span class="answered">{{ $latest->label }}</span>
+          @else
+            <span class="unanswered">none recorded</span>
+          @endif
         @endif
       </div>
 
@@ -142,13 +144,12 @@
           <input type="text" name="label" value="{{ $latest->label ?? $suggested }}">
         </label>
         <input type="text" name="reason" placeholder="why (optional)">
-        <button class="up" type="submit" name="verdict" value="{{ AnnotationVerdict::Up->value }}">&#128077; It was right</button>
-        <button class="down" type="submit" name="verdict" value="{{ AnnotationVerdict::Down->value }}">&#128078; It was wrong</button>
+        <button class="up" type="submit">Save answer</button>
       </form>
       <p class="hint">
-        The verdict judges the decision that was already made; the answer box says what
-        the right action was. Rejecting with the box changed to the right action is the
-        most useful thing you can record — leave it as-is to reject without saying.
+        The box says what the right answer was, and starts on the one the model picked.
+        Change it where the model was wrong, leave it where it was right, and clear it to
+        record that you looked and could not settle on an answer.
       </p>
     </div>
   @empty
