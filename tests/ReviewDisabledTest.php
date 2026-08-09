@@ -17,6 +17,6 @@ class ReviewDisabledTest extends DatabaseTestCase
 
         $this->get('/ai-workflow/review')->assertNotFound();
         $this->get('/ai-workflow/review/1/input')->assertNotFound();
-        $this->post('/ai-workflow/review/1/annotate', ['verdict' => 'up'])->assertNotFound();
+        $this->post('/ai-workflow/review/1/annotate', ['label' => 'respond_to_customer'])->assertNotFound();
     }
 }
