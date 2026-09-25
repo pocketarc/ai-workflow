@@ -557,6 +557,38 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertEqualsWithDelta(0.8, (float) $scoreB->score, 0.0001);
     }
 
+    public function test_a_replayed_answer_holding_a_non_finite_number_scores_as_a_failed_replay(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => ['confidence' => -INF]])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Non-finite answer',
+            requests: [$request],
+            models: ['openrouter:model-a', 'openrouter:model-b'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $scoreA = $evalRun->scores->where('model', 'openrouter:model-a')->first();
+        $this->assertNotNull($scoreA);
+        $this->assertEqualsWithDelta(0.0, (float) $scoreA->score, 0.0001);
+        $this->assertNull($scoreA->structured_response);
+        $this->assertIsString($scoreA->details['error'] ?? null);
+        $this->assertStringContainsString('could not be decoded', $scoreA->details['error']);
+
+        $scoreB = $evalRun->scores->where('model', 'openrouter:model-b')->first();
+        $this->assertNotNull($scoreB);
+        $this->assertEqualsWithDelta(1.0, (float) $scoreB->score, 0.0001);
+    }
+
     public function test_eval_runner_surfaces_score_persistence_failures(): void
     {
         Prism::fake([

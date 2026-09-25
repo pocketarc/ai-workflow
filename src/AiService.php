@@ -609,7 +609,7 @@ class AiService
 
         $integration ??= $this->resolveIntegration($provider);
 
-        return $this->requestStructured($integration, fn (): StructuredResponse => $builder->asStructured());
+        return $this->requestStructured($integration, fn (): StructuredResponse => StructuredResponseGuard::rejectNonFiniteNumbers($builder->asStructured()));
     }
 
     /**

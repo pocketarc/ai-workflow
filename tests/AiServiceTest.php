@@ -507,6 +507,27 @@ class AiServiceTest extends TestCase
         );
     }
 
+    public function test_structured_messages_fall_back_when_the_answer_holds_a_non_finite_number(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => ['likelihood' => INF]])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'from fallback'])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $response = $service->sendStructuredMessages(
+            collect([new UserMessage('Hello')]),
+            $this->makePrompt(fallbackModel: 'openrouter:fallback-model'),
+            $this->makeSchema(),
+        );
+
+        $this->assertSame(['answer' => 'from fallback'], $response->structured);
+    }
+
     // --- flush ---
 
     public function test_flush_resets_all_state(): void

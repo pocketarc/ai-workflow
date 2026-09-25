@@ -210,7 +210,7 @@ class AiWorkflowReplayer
             $builder = $builder->withSystemPrompt($systemPrompt);
         }
 
-        return $builder->asStructured();
+        return StructuredResponseGuard::rejectNonFiniteNumbers($builder->asStructured());
     }
 
     /**
