@@ -132,9 +132,7 @@ class EvalReportMetrics
             inputTokens: $inputTokens,
             outputTokens: $outputTokens,
             thoughtTokens: $thoughtTokens,
-            // Providers bill thought tokens at the output rate, so they join
-            // the output side of the cost.
-            cost: $this->costFor($model, $inputTokens, $outputTokens + $thoughtTokens),
+            cost: $this->costFor($model, $inputTokens, $this->billedOutputTokens($model, $outputTokens, $thoughtTokens)),
             medianLatencyMs: Statistics::percentile($latencies, 0.5),
             p95LatencyMs: Statistics::percentile($latencies, 0.95),
         );
@@ -541,6 +539,18 @@ class EvalReportMetrics
         }
 
         return mb_strlen($text) > $limit ? mb_substr($text, 0, $limit).'…' : $text;
+    }
+
+    /**
+     * Adds thought tokens only when the provider's output count excludes
+     * them. Gemini's API excludes them; OpenRouter's count includes them,
+     * even for Gemini models.
+     */
+    private function billedOutputTokens(string $model, int $outputTokens, int $thoughtTokens): int
+    {
+        $provider = explode(':', $model, 2)[0];
+
+        return $provider === 'gemini' ? $outputTokens + $thoughtTokens : $outputTokens;
     }
 
     private function costFor(string $model, int $inputTokens, int $outputTokens): ?float

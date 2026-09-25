@@ -166,7 +166,7 @@ class EvalReportMetricsTest extends DatabaseTestCase
         $this->assertContains('openrouter:b', $report->modelsMissingPricing);
     }
 
-    public function test_thought_tokens_bill_at_the_output_rate(): void
+    public function test_thought_tokens_already_in_the_output_count_are_not_billed_twice(): void
     {
         config(['ai-workflow.model_pricing' => [
             'openrouter:a' => ['input' => 1.0, 'output' => 2.0],
@@ -175,16 +175,58 @@ class EvalReportMetricsTest extends DatabaseTestCase
         $run = AiWorkflowEvalRun::create(['name' => 'Reasoning run', 'models' => ['openrouter:a']]);
         $requests = $this->makeRequests(2);
 
-        $this->score($run, $requests[0], 'openrouter:a', 'respond', 'respond', 1.0, thoughtTokens: 500);
-        $this->score($run, $requests[1], 'openrouter:a', 'respond', 'respond', 1.0, thoughtTokens: 300);
+        $this->score($run, $requests[0], 'openrouter:a', 'respond', 'respond', 1.0, thoughtTokens: 150);
+        $this->score($run, $requests[1], 'openrouter:a', 'respond', 'respond', 1.0, thoughtTokens: 100);
 
         $report = app(EvalReportMetrics::class)->compute($run);
         $a = $this->summaryFor($report->models, 'openrouter:a');
 
-        $this->assertSame(800, $a->thoughtTokens);
+        $this->assertSame(250, $a->thoughtTokens);
+        $this->assertEqualsWithDelta(
+            (200 / 1_000_000 * 1.0) + (400 / 1_000_000 * 2.0),
+            $a->cost ?? 0.0,
+            1e-9,
+        );
+    }
 
-        // 200 in + 400 out + 800 thought: without the thought tokens the
-        // total would miss the biggest share of a reasoning model's cost.
+    public function test_a_gemini_model_served_through_openrouter_is_not_billed_twice(): void
+    {
+        config(['ai-workflow.model_pricing' => [
+            'openrouter:google/gemini-x' => ['input' => 1.0, 'output' => 2.0],
+        ]]);
+
+        $run = AiWorkflowEvalRun::create(['name' => 'Routed Gemini run', 'models' => ['openrouter:google/gemini-x']]);
+        $requests = $this->makeRequests(2);
+
+        $this->score($run, $requests[0], 'openrouter:google/gemini-x', 'respond', 'respond', 1.0, thoughtTokens: 150);
+        $this->score($run, $requests[1], 'openrouter:google/gemini-x', 'respond', 'respond', 1.0, thoughtTokens: 100);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+        $a = $this->summaryFor($report->models, 'openrouter:google/gemini-x');
+
+        $this->assertEqualsWithDelta(
+            (200 / 1_000_000 * 1.0) + (400 / 1_000_000 * 2.0),
+            $a->cost ?? 0.0,
+            1e-9,
+        );
+    }
+
+    public function test_gemini_thought_tokens_bill_at_the_output_rate_on_top_of_the_output(): void
+    {
+        config(['ai-workflow.model_pricing' => [
+            'gemini:a' => ['input' => 1.0, 'output' => 2.0],
+        ]]);
+
+        $run = AiWorkflowEvalRun::create(['name' => 'Gemini reasoning run', 'models' => ['gemini:a']]);
+        $requests = $this->makeRequests(2);
+
+        $this->score($run, $requests[0], 'gemini:a', 'respond', 'respond', 1.0, thoughtTokens: 500);
+        $this->score($run, $requests[1], 'gemini:a', 'respond', 'respond', 1.0, thoughtTokens: 300);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+        $a = $this->summaryFor($report->models, 'gemini:a');
+
+        $this->assertSame(800, $a->thoughtTokens);
         $this->assertEqualsWithDelta(
             (200 / 1_000_000 * 1.0) + ((400 + 800) / 1_000_000 * 2.0),
             $a->cost ?? 0.0,
