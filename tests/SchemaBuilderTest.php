@@ -461,7 +461,57 @@ class SchemaBuilderTest extends TestCase
         $this->assertSame(100, $result->usage->promptTokens);
         $this->assertSame(50, $result->usage->completionTokens);
         $this->assertSame(30, $result->usage->thoughtTokens);
-        $this->assertSame($result->response->usage, $result->usage);
+        $this->assertEquals($result->response->usage, $result->usage);
         $this->assertSame(FinishReason::Stop, $result->response->finishReason);
+    }
+
+    public function test_send_structured_data_usage_adds_up_every_attempt(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50, cacheReadInputTokens: 20, thoughtTokens: 10)),
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'negative', 'confidence' => 0.8])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(120, 60, thoughtTokens: 5)),
+        ]);
+
+        $service = app(AiService::class);
+        $result = $service->sendStructuredData(
+            collect([new UserMessage('Analyze')]),
+            new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+            SentimentData::class,
+        );
+
+        $this->assertEquals(new Usage(220, 110, cacheReadInputTokens: 20, thoughtTokens: 15), $result->usage);
+        $this->assertEquals(new Usage(120, 60, thoughtTokens: 5), $result->response->usage);
+    }
+
+    public function test_structured_validation_exception_carries_the_usage_of_every_attempt(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50, cacheWriteInputTokens: 40)),
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.6])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(120, 60)),
+        ]);
+
+        try {
+            app(AiService::class)->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+                maxAttempts: 2,
+            );
+            $this->fail('Expected StructuredValidationException');
+        } catch (StructuredValidationException $e) {
+            $this->assertEquals(new Usage(220, 110, cacheWriteInputTokens: 40), $e->usage);
+        }
     }
 }

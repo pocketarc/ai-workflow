@@ -435,9 +435,11 @@ class AiService
 
         /** @var Collection<int, Message> $attemptMessages */
         $attemptMessages = new Collection($messages->all());
+        $usage = new Usage(0, 0);
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
+            $usage = $this->addUsage($usage, $response->usage);
 
             try {
                 $payload = SchemaBuilder::stripNullsForDefaultedProperties($dataClass, $response->structured);
@@ -452,10 +454,10 @@ class AiService
                 /** @var T */
                 $data = $dataClass::validateAndCreate($payload);
 
-                return new StructuredDataResult($data, $response, $response->usage);
+                return new StructuredDataResult($data, $response, $usage);
             } catch (Throwable $e) {
                 if ($attempt === $maxAttempts) {
-                    throw new StructuredValidationException($e->getMessage(), $attempt, $e);
+                    throw new StructuredValidationException($e->getMessage(), $attempt, $e, $usage);
                 }
 
                 $attemptMessages = new Collection([
@@ -466,7 +468,23 @@ class AiService
             }
         }
 
-        throw new StructuredValidationException('Max attempts reached', $maxAttempts);
+        throw new StructuredValidationException('Max attempts reached', $maxAttempts, usage: $usage);
+    }
+
+    private function addUsage(Usage $total, Usage $usage): Usage
+    {
+        return new Usage(
+            promptTokens: $total->promptTokens + $usage->promptTokens,
+            completionTokens: $total->completionTokens + $usage->completionTokens,
+            cacheWriteInputTokens: $this->addOptionalTokens($total->cacheWriteInputTokens, $usage->cacheWriteInputTokens),
+            cacheReadInputTokens: $this->addOptionalTokens($total->cacheReadInputTokens, $usage->cacheReadInputTokens),
+            thoughtTokens: $this->addOptionalTokens($total->thoughtTokens, $usage->thoughtTokens),
+        );
+    }
+
+    private function addOptionalTokens(?int $total, ?int $tokens): ?int
+    {
+        return $tokens === null ? $total : ($total ?? 0) + $tokens;
     }
 
     /**
