@@ -36,6 +36,7 @@ use Override;
  * @property int|null $cache_write_tokens
  * @property int $duration_ms
  * @property array<string, mixed>|null $schema
+ * @property string|null $schema_name
  * @property string|null $error
  * @property int|null $http_status
  * @property string|null $response_body
@@ -88,6 +89,7 @@ class AiWorkflowRequest extends Model
         'cache_write_tokens',
         'duration_ms',
         'schema',
+        'schema_name',
         'error',
         'http_status',
         'response_body',

@@ -847,6 +847,7 @@ class AiService
             'cache_write_tokens' => $textResponse?->usage->cacheWriteInputTokens ?? $structuredResponse?->usage->cacheWriteInputTokens,
             'duration_ms' => (int) $durationMs,
             'schema' => $schema?->toArray(),
+            'schema_name' => $schema?->name(),
             'error' => $error?->getMessage(),
             'error_class' => $error !== null ? $error::class : null,
             'http_status' => $httpDetails['status'],

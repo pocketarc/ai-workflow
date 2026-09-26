@@ -277,6 +277,7 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertSame(['answer' => 'test'], $request->structured_response);
         $this->assertNotNull($request->schema);
         $this->assertIsArray($request->schema);
+        $this->assertSame('test', $request->schema_name);
     }
 
     public function test_execution_token_tracking(): void
