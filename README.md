@@ -164,12 +164,15 @@ $result = $aiService->sendStructuredData(
     SentimentAnalysis::class,
 );
 
-// $result is a validated SentimentAnalysis instance
-echo $result->sentiment;   // "positive"
-echo $result->confidence;  // 0.95
+// $result->data is a validated SentimentAnalysis instance
+echo $result->data->sentiment;   // "positive"
+echo $result->data->confidence;  // 0.95
+
+$result->response;  // the Prism structured response from the attempt that passed
+$result->usage;     // token usage summed across every attempt
 ```
 
-On validation failure, the package appends the error to the conversation and retries up to `$maxAttempts` (default 3).
+On validation failure, `sendStructuredData()` appends the error to the conversation and sends the request again. It makes at most `$maxAttempts` attempts (default 3). If no attempt passes, it throws `StructuredValidationException`. The exception's `usage` property contains the token usage summed across every attempt.
 
 ### Streaming
 
@@ -325,11 +328,11 @@ A ready-to-use listener adds Sentry breadcrumbs for AI requests. Register in you
 ```php
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
-use AiWorkflow\Listeners\SentrySpanListener;
+use AiWorkflow\Listeners\SentryBreadcrumbListener;
 
 protected $listen = [
-    AiWorkflowRequestCompleted::class => [SentrySpanListener::class . '@handleCompleted'],
-    AiWorkflowRequestFailed::class => [SentrySpanListener::class . '@handleFailed'],
+    AiWorkflowRequestCompleted::class => [SentryBreadcrumbListener::class . '@handleCompleted'],
+    AiWorkflowRequestFailed::class => [SentryBreadcrumbListener::class . '@handleFailed'],
 ];
 ```
 
