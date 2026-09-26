@@ -225,6 +225,30 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertGreaterThanOrEqual(0, $score->duration_ms);
     }
 
+    public function test_eval_runner_records_replay_cache_tokens(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withUsage(new Usage(15, 25, cacheWriteInputTokens: 5, cacheReadInputTokens: 10))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Cache usage eval',
+            requests: [$request],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame(10, $score->cache_read_tokens);
+        $this->assertSame(5, $score->cache_write_tokens);
+    }
+
     public function test_a_judge_failure_still_persists_the_replay_usage(): void
     {
         Prism::fake([
@@ -555,6 +579,38 @@ class EvalFrameworkTest extends DatabaseTestCase
         $scoreB = $evalRun->scores->where('model', 'openrouter:model-b')->first();
         $this->assertNotNull($scoreB);
         $this->assertEqualsWithDelta(0.8, (float) $scoreB->score, 0.0001);
+    }
+
+    public function test_a_replayed_answer_holding_a_non_finite_number_scores_as_a_failed_replay(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => ['confidence' => -INF]])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Non-finite answer',
+            requests: [$request],
+            models: ['openrouter:model-a', 'openrouter:model-b'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $scoreA = $evalRun->scores->where('model', 'openrouter:model-a')->first();
+        $this->assertNotNull($scoreA);
+        $this->assertEqualsWithDelta(0.0, (float) $scoreA->score, 0.0001);
+        $this->assertNull($scoreA->structured_response);
+        $this->assertIsString($scoreA->details['error'] ?? null);
+        $this->assertStringContainsString('could not be decoded', $scoreA->details['error']);
+
+        $scoreB = $evalRun->scores->where('model', 'openrouter:model-b')->first();
+        $this->assertNotNull($scoreB);
+        $this->assertEqualsWithDelta(1.0, (float) $scoreB->score, 0.0001);
     }
 
     public function test_eval_runner_surfaces_score_persistence_failures(): void

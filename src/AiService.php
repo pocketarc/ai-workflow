@@ -609,7 +609,7 @@ class AiService
 
         $integration ??= $this->resolveIntegration($provider);
 
-        return $this->requestStructured($integration, fn (): StructuredResponse => $builder->asStructured());
+        return $this->requestStructured($integration, fn (): StructuredResponse => StructuredResponseGuard::rejectNonFiniteNumbers($builder->asStructured()));
     }
 
     /**
@@ -843,6 +843,8 @@ class AiService
             'input_tokens' => $textResponse?->usage->promptTokens ?? $structuredResponse?->usage->promptTokens,
             'output_tokens' => $textResponse?->usage->completionTokens ?? $structuredResponse?->usage->completionTokens,
             'thought_tokens' => $textResponse?->usage->thoughtTokens ?? $structuredResponse?->usage->thoughtTokens,
+            'cache_read_tokens' => $textResponse?->usage->cacheReadInputTokens ?? $structuredResponse?->usage->cacheReadInputTokens,
+            'cache_write_tokens' => $textResponse?->usage->cacheWriteInputTokens ?? $structuredResponse?->usage->cacheWriteInputTokens,
             'duration_ms' => (int) $durationMs,
             'schema' => $schema?->toArray(),
             'error' => $error?->getMessage(),
@@ -924,6 +926,8 @@ class AiService
             'input_tokens' => $endEvent->usage?->promptTokens,
             'output_tokens' => $endEvent->usage?->completionTokens,
             'thought_tokens' => $endEvent->usage?->thoughtTokens,
+            'cache_read_tokens' => $endEvent->usage?->cacheReadInputTokens,
+            'cache_write_tokens' => $endEvent->usage?->cacheWriteInputTokens,
             'duration_ms' => (int) $durationMs,
             'tags' => $this->resolveTags($prompt),
             'template_variables' => $prompt->variables !== [] ? $prompt->variables : null,

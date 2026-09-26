@@ -91,10 +91,11 @@ return [
         'context' => null,
     ],
 
-    // Per-model pricing in USD per 1M tokens, keyed by provider:model. Used to
-    // cost eval runs. A model missing from this map is reported without a cost
-    // rather than guessed at, so the numbers are never quietly wrong.
+    // Per-model prices for eval reports, in USD per 1M tokens. A model missing
+    // from this map is shown without a cost and listed as having no pricing.
+    // Cache-read or cache-write tokens without a configured rate are charged
+    // at the input rate.
     'model_pricing' => [
-        // 'openrouter:anthropic/claude-opus-4.6' => ['input' => 5.00, 'output' => 25.00],
+        // 'openrouter:vendor/model' => ['input' => 5.00, 'output' => 25.00, 'cache_read' => 0.50, 'cache_write' => 6.25],
     ],
 ];

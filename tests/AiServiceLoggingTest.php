@@ -14,6 +14,7 @@ use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response as HttpClientResponse;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Exceptions\PrismException;
+use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
@@ -120,6 +121,46 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertSame(PrismException::class, $request->error_class);
         $this->assertNull($request->http_status);
         $this->assertNull($request->response_body);
+    }
+
+    public function test_a_structured_request_logs_its_cache_tokens(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'cached'])
+                ->withUsage(new Usage(1200, 40, cacheWriteInputTokens: 150, cacheReadInputTokens: 1000))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        app(AiService::class)->sendStructuredMessages(collect([new UserMessage('Hello')]), $this->makePrompt(), $this->makeSchema());
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame(1000, $request->cache_read_tokens);
+        $this->assertSame(150, $request->cache_write_tokens);
+    }
+
+    public function test_a_structured_answer_holding_a_non_finite_number_is_logged_as_a_decoding_failure(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withText('{"answer":1e999}')
+                ->withStructured(['answer' => INF])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+
+        try {
+            $service->sendStructuredMessages(collect([new UserMessage('Hello')]), $this->makePrompt(), $this->makeSchema());
+            $this->fail('Expected a structured decoding failure.');
+        } catch (PrismStructuredDecodingException) {
+        }
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertNull($request->structured_response);
+        $this->assertSame(PrismStructuredDecodingException::class, $request->error_class);
     }
 
     public function test_extract_http_details_reads_prism_exception_fields(): void
