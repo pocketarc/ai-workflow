@@ -191,7 +191,7 @@
     <h2>{{ $model->model }}</h2>
     <p class="sub">
       {{ $model->correct }}/{{ $model->labelled }} correct
-      · {{ number_format($model->inputTokens) }} in / {{ number_format($model->outputTokens) }} out{{ $model->thoughtTokens > 0 ? ' / '.number_format($model->thoughtTokens).' thought' : '' }} tokens
+      · {{ number_format($model->inputTokens) }} in{{ $model->cacheReadTokens > 0 ? ' ('.number_format($model->cacheReadTokens).' cached)' : '' }} / {{ number_format($model->outputTokens) }} out{{ $model->thoughtTokens > 0 ? ' / '.number_format($model->thoughtTokens).' thought' : '' }} tokens
       · total {{ $money($model->cost) }}
     </p>
 

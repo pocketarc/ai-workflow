@@ -82,6 +82,8 @@ class EvalReportMetrics
         $inputTokens = 0;
         $outputTokens = 0;
         $thoughtTokens = 0;
+        $cacheReadTokens = 0;
+        $cacheWriteTokens = 0;
         /** @var list<int> $latencies */
         $latencies = [];
 
@@ -89,6 +91,8 @@ class EvalReportMetrics
             $inputTokens += $score->input_tokens ?? 0;
             $outputTokens += $score->output_tokens ?? 0;
             $thoughtTokens += $score->thought_tokens ?? 0;
+            $cacheReadTokens += $score->cache_read_tokens ?? 0;
+            $cacheWriteTokens += $score->cache_write_tokens ?? 0;
 
             if ($score->duration_ms !== null) {
                 $latencies[] = $score->duration_ms;
@@ -132,7 +136,15 @@ class EvalReportMetrics
             inputTokens: $inputTokens,
             outputTokens: $outputTokens,
             thoughtTokens: $thoughtTokens,
-            cost: $this->costFor($model, $inputTokens, $this->billedOutputTokens($model, $outputTokens, $thoughtTokens)),
+            cacheReadTokens: $cacheReadTokens,
+            cacheWriteTokens: $cacheWriteTokens,
+            cost: $this->costFor(
+                $model,
+                $inputTokens,
+                $cacheReadTokens,
+                $cacheWriteTokens,
+                $this->billedOutputTokens($model, $outputTokens, $thoughtTokens),
+            ),
             medianLatencyMs: Statistics::percentile($latencies, 0.5),
             p95LatencyMs: Statistics::percentile($latencies, 0.95),
         );
@@ -330,6 +342,8 @@ class EvalReportMetrics
             inputTokens: $summary->inputTokens,
             outputTokens: $summary->outputTokens,
             thoughtTokens: $summary->thoughtTokens,
+            cacheReadTokens: $summary->cacheReadTokens,
+            cacheWriteTokens: $summary->cacheWriteTokens,
             cost: $summary->cost,
             medianLatencyMs: $summary->medianLatencyMs,
             p95LatencyMs: $summary->p95LatencyMs,
@@ -553,7 +567,11 @@ class EvalReportMetrics
         return $provider === 'gemini' ? $outputTokens + $thoughtTokens : $outputTokens;
     }
 
-    private function costFor(string $model, int $inputTokens, int $outputTokens): ?float
+    /**
+     * Prism's input token count excludes cache reads and writes for OpenAI
+     * and Anthropic, and includes them for OpenRouter and Gemini.
+     */
+    private function costFor(string $model, int $inputTokens, int $cacheReadTokens, int $cacheWriteTokens, int $outputTokens): ?float
     {
         $pricing = $this->pricingFor($model);
 
@@ -561,12 +579,19 @@ class EvalReportMetrics
             return null;
         }
 
-        return (($inputTokens / 1_000_000) * $pricing['input'])
+        $provider = explode(':', $model, 2)[0];
+        $uncachedInputTokens = in_array($provider, ['openai', 'anthropic'], true)
+            ? $inputTokens
+            : max(0, $inputTokens - $cacheReadTokens - $cacheWriteTokens);
+
+        return (($uncachedInputTokens / 1_000_000) * $pricing['input'])
+            + (($cacheReadTokens / 1_000_000) * ($pricing['cache_read'] ?? $pricing['input']))
+            + (($cacheWriteTokens / 1_000_000) * ($pricing['cache_write'] ?? $pricing['input']))
             + (($outputTokens / 1_000_000) * $pricing['output']);
     }
 
     /**
-     * @return array{input: float, output: float}|null
+     * @return array{input: float, output: float, cache_read: float|null, cache_write: float|null}|null
      */
     private function pricingFor(string $model): ?array
     {
@@ -589,7 +614,15 @@ class EvalReportMetrics
             return null;
         }
 
-        return ['input' => (float) $input, 'output' => (float) $output];
+        $cacheRead = $entry['cache_read'] ?? null;
+        $cacheWrite = $entry['cache_write'] ?? null;
+
+        return [
+            'input' => (float) $input,
+            'output' => (float) $output,
+            'cache_read' => is_numeric($cacheRead) ? (float) $cacheRead : null,
+            'cache_write' => is_numeric($cacheWrite) ? (float) $cacheWrite : null,
+        ];
     }
 
     /**

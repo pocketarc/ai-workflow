@@ -123,6 +123,23 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertNull($request->response_body);
     }
 
+    public function test_a_structured_request_logs_its_cache_tokens(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'cached'])
+                ->withUsage(new Usage(1200, 40, cacheWriteInputTokens: 150, cacheReadInputTokens: 1000))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        app(AiService::class)->sendStructuredMessages(collect([new UserMessage('Hello')]), $this->makePrompt(), $this->makeSchema());
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame(1000, $request->cache_read_tokens);
+        $this->assertSame(150, $request->cache_write_tokens);
+    }
+
     public function test_a_structured_answer_holding_a_non_finite_number_is_logged_as_a_decoding_failure(): void
     {
         Prism::fake([

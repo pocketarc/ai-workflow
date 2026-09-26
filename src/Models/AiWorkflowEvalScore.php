@@ -25,6 +25,8 @@ use Override;
  * @property int|null $input_tokens
  * @property int|null $output_tokens
  * @property int|null $thought_tokens
+ * @property int|null $cache_read_tokens
+ * @property int|null $cache_write_tokens
  * @property int|null $duration_ms
  * @property string|null $ground_truth
  * @property string|null $predicted
@@ -50,6 +52,8 @@ class AiWorkflowEvalScore extends Model
         'input_tokens',
         'output_tokens',
         'thought_tokens',
+        'cache_read_tokens',
+        'cache_write_tokens',
         'duration_ms',
         'ground_truth',
         'predicted',
@@ -68,6 +72,8 @@ class AiWorkflowEvalScore extends Model
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
             'thought_tokens' => 'integer',
+            'cache_read_tokens' => 'integer',
+            'cache_write_tokens' => 'integer',
             'duration_ms' => 'integer',
         ];
     }

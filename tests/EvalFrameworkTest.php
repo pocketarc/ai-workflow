@@ -225,6 +225,30 @@ class EvalFrameworkTest extends DatabaseTestCase
         $this->assertGreaterThanOrEqual(0, $score->duration_ms);
     }
 
+    public function test_eval_runner_records_replay_cache_tokens(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['intent' => 'billing'])
+                ->withUsage(new Usage(15, 25, cacheWriteInputTokens: 5, cacheReadInputTokens: 10))
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $request = $this->createStructuredRequest(['intent' => 'billing']);
+
+        $evalRun = app(AiWorkflowEvalRunner::class)->run(
+            name: 'Cache usage eval',
+            requests: [$request],
+            models: ['openrouter:model-a'],
+            judge: $this->alwaysScoreJudge(1.0),
+        );
+
+        $score = $evalRun->scores->first();
+        $this->assertNotNull($score);
+        $this->assertSame(10, $score->cache_read_tokens);
+        $this->assertSame(5, $score->cache_write_tokens);
+    }
+
     public function test_a_judge_failure_still_persists_the_replay_usage(): void
     {
         Prism::fake([

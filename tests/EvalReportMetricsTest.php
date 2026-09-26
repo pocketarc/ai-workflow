@@ -234,6 +234,73 @@ class EvalReportMetricsTest extends DatabaseTestCase
         );
     }
 
+    public function test_openrouter_cache_tokens_are_priced_at_their_own_rates_within_the_input(): void
+    {
+        config(['ai-workflow.model_pricing' => [
+            'openrouter:a' => ['input' => 1.0, 'output' => 2.0, 'cache_read' => 0.1, 'cache_write' => 1.25],
+        ]]);
+
+        $run = AiWorkflowEvalRun::create(['name' => 'Cached run', 'models' => ['openrouter:a']]);
+        $requests = $this->makeRequests(2);
+
+        $this->score($run, $requests[0], 'openrouter:a', 'respond', 'respond', 1.0, cacheReadTokens: 60, cacheWriteTokens: 20);
+        $this->score($run, $requests[1], 'openrouter:a', 'respond', 'respond', 1.0, cacheReadTokens: 60, cacheWriteTokens: 20);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+        $a = $this->summaryFor($report->models, 'openrouter:a');
+
+        $this->assertSame(120, $a->cacheReadTokens);
+        $this->assertSame(40, $a->cacheWriteTokens);
+        $this->assertEqualsWithDelta(
+            (40 / 1_000_000 * 1.0) + (120 / 1_000_000 * 0.1) + (40 / 1_000_000 * 1.25) + (400 / 1_000_000 * 2.0),
+            $a->cost ?? 0.0,
+            1e-9,
+        );
+    }
+
+    public function test_anthropic_cache_tokens_are_priced_on_top_of_the_input(): void
+    {
+        config(['ai-workflow.model_pricing' => [
+            'anthropic:a' => ['input' => 1.0, 'output' => 2.0, 'cache_read' => 0.1, 'cache_write' => 1.25],
+        ]]);
+
+        $run = AiWorkflowEvalRun::create(['name' => 'Anthropic cached run', 'models' => ['anthropic:a']]);
+        $requests = $this->makeRequests(2);
+
+        $this->score($run, $requests[0], 'anthropic:a', 'respond', 'respond', 1.0, cacheReadTokens: 60, cacheWriteTokens: 20);
+        $this->score($run, $requests[1], 'anthropic:a', 'respond', 'respond', 1.0, cacheReadTokens: 60, cacheWriteTokens: 20);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+        $a = $this->summaryFor($report->models, 'anthropic:a');
+
+        $this->assertEqualsWithDelta(
+            (200 / 1_000_000 * 1.0) + (120 / 1_000_000 * 0.1) + (40 / 1_000_000 * 1.25) + (400 / 1_000_000 * 2.0),
+            $a->cost ?? 0.0,
+            1e-9,
+        );
+    }
+
+    public function test_cache_tokens_fall_back_to_the_input_rate_without_cache_prices(): void
+    {
+        config(['ai-workflow.model_pricing' => [
+            'openrouter:a' => ['input' => 1.0, 'output' => 2.0],
+        ]]);
+
+        $run = AiWorkflowEvalRun::create(['name' => 'Unpriced cache run', 'models' => ['openrouter:a']]);
+        $requests = $this->makeRequests(1);
+
+        $this->score($run, $requests[0], 'openrouter:a', 'respond', 'respond', 1.0, cacheReadTokens: 60, cacheWriteTokens: 20);
+
+        $report = app(EvalReportMetrics::class)->compute($run);
+        $a = $this->summaryFor($report->models, 'openrouter:a');
+
+        $this->assertEqualsWithDelta(
+            (100 / 1_000_000 * 1.0) + (200 / 1_000_000 * 2.0),
+            $a->cost ?? 0.0,
+            1e-9,
+        );
+    }
+
     public function test_it_reports_median_and_p95_latency(): void
     {
         $run = AiWorkflowEvalRun::create(['name' => 'Latency run', 'models' => ['openrouter:a']]);
@@ -345,6 +412,8 @@ class EvalReportMetricsTest extends DatabaseTestCase
         ?string $error = null,
         int $durationMs = 100,
         ?int $thoughtTokens = null,
+        ?int $cacheReadTokens = null,
+        ?int $cacheWriteTokens = null,
     ): void {
         AiWorkflowEvalScore::create([
             'eval_run_id' => $run->id,
@@ -357,6 +426,8 @@ class EvalReportMetricsTest extends DatabaseTestCase
             'input_tokens' => 100,
             'output_tokens' => 200,
             'thought_tokens' => $thoughtTokens,
+            'cache_read_tokens' => $cacheReadTokens,
+            'cache_write_tokens' => $cacheWriteTokens,
             'duration_ms' => $durationMs,
         ]);
     }

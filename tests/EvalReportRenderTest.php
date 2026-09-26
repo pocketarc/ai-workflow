@@ -78,6 +78,15 @@ class EvalReportRenderTest extends DatabaseTestCase
         $this->assertStringNotContainsString('@endif', $html);
     }
 
+    public function test_it_reports_cached_input_tokens(): void
+    {
+        $run = $this->seedRun(cacheReadTokens: 300);
+
+        $html = app(EvalReportRenderer::class)->render($run);
+
+        $this->assertStringContainsString('400 in (1,200 cached)', $html);
+    }
+
     public function test_it_omits_thought_tokens_when_a_model_reported_none(): void
     {
         $run = $this->seedRun();
@@ -257,7 +266,7 @@ class EvalReportRenderTest extends DatabaseTestCase
             ->assertFailed();
     }
 
-    private function seedRun(?int $thoughtTokens = null): AiWorkflowEvalRun
+    private function seedRun(?int $thoughtTokens = null, ?int $cacheReadTokens = null): AiWorkflowEvalRun
     {
         $run = AiWorkflowEvalRun::create([
             'name' => 'Comparison run',
@@ -290,6 +299,7 @@ class EvalReportRenderTest extends DatabaseTestCase
                     'input_tokens' => 100,
                     'output_tokens' => 200,
                     'thought_tokens' => $thoughtTokens,
+                    'cache_read_tokens' => $cacheReadTokens,
                     'duration_ms' => 100,
                 ]);
             }

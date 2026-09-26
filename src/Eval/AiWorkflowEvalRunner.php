@@ -91,6 +91,8 @@ class AiWorkflowEvalRunner
                         'input_tokens' => $response?->usage->promptTokens,
                         'output_tokens' => $response?->usage->completionTokens,
                         'thought_tokens' => $response?->usage->thoughtTokens,
+                        'cache_read_tokens' => $response?->usage->cacheReadInputTokens,
+                        'cache_write_tokens' => $response?->usage->cacheWriteInputTokens,
                         'duration_ms' => $durationMs,
                         'ground_truth' => $this->groundTruthFor($request),
                     ]);
@@ -112,6 +114,8 @@ class AiWorkflowEvalRunner
                     'input_tokens' => $response->usage->promptTokens,
                     'output_tokens' => $response->usage->completionTokens,
                     'thought_tokens' => $response->usage->thoughtTokens,
+                    'cache_read_tokens' => $response->usage->cacheReadInputTokens,
+                    'cache_write_tokens' => $response->usage->cacheWriteInputTokens,
                     'duration_ms' => $durationMs,
                     'ground_truth' => $this->groundTruthFor($request),
                     'predicted' => $result->predicted,

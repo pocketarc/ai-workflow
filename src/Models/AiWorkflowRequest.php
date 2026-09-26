@@ -32,6 +32,8 @@ use Override;
  * @property int|null $input_tokens
  * @property int|null $output_tokens
  * @property int|null $thought_tokens
+ * @property int|null $cache_read_tokens
+ * @property int|null $cache_write_tokens
  * @property int $duration_ms
  * @property array<string, mixed>|null $schema
  * @property string|null $error
@@ -82,6 +84,8 @@ class AiWorkflowRequest extends Model
         'input_tokens',
         'output_tokens',
         'thought_tokens',
+        'cache_read_tokens',
+        'cache_write_tokens',
         'duration_ms',
         'schema',
         'error',
@@ -109,6 +113,8 @@ class AiWorkflowRequest extends Model
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
             'thought_tokens' => 'integer',
+            'cache_read_tokens' => 'integer',
+            'cache_write_tokens' => 'integer',
             'duration_ms' => 'integer',
             'http_status' => 'integer',
         ];

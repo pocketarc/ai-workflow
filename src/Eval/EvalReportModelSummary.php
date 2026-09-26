@@ -38,6 +38,8 @@ class EvalReportModelSummary
         public readonly int $inputTokens,
         public readonly int $outputTokens,
         public readonly int $thoughtTokens,
+        public readonly int $cacheReadTokens,
+        public readonly int $cacheWriteTokens,
         public readonly ?float $cost,
         public readonly ?float $medianLatencyMs,
         public readonly ?float $p95LatencyMs,
