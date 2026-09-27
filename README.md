@@ -261,7 +261,7 @@ AiWorkflowRequest::query()->errors()->get();
 
 ## Request Logging
 
-When enabled, every AI call is recorded to the database with enough detail to replay it: system prompt, messages, model, provider, schema, response, token usage, duration, and tags.
+When enabled, every AI call is recorded to the database with enough detail to replay it: system prompt, messages, model, provider, schema, response, token usage, duration, and tags. A failed call is recorded with its error. If the response was rejected by a middleware, such as an output guardrail, or because of its finish reason, the row also includes that response and its token usage.
 
 Enable logging in your `.env`:
 
@@ -358,7 +358,7 @@ AI_WORKFLOW_CACHE=true
 AI_WORKFLOW_CACHE_STORE=redis  # optional, defaults to your app's default cache store
 ```
 
-Cache hits skip the API call entirely and do not create log records.
+On a cache hit, no API call is made and no log record is created. `sendStructuredData()` caches a response only after it passes validation, and the result's `usage` includes no tokens for an attempt served from the cache.
 
 ## Middleware
 
@@ -612,7 +612,7 @@ The breaker state, rate budget, and transport audit live on the integration row.
 
 ### Fallback Models
 
-If a structured request fails to decode JSON (the model produced invalid output), the package automatically retries with the `fallback_model` if one is configured in the prompt's front-matter.
+If the JSON in a structured response cannot be decoded (the model produced invalid output), the package retries the request with the `fallback_model` configured in the prompt's front-matter, if there is one. The fallback request is run through the same middleware as the original, and both requests are logged.
 
 ## Finish Reason Handling
 

@@ -10,12 +10,14 @@ use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Exceptions\GuardrailViolationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Middleware\InputGuardrail;
 use AiWorkflow\Middleware\OutputGuardrail;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use Closure;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response as HttpClientResponse;
@@ -27,6 +29,7 @@ use Prism\Prism\Exceptions\PrismStructuredDecodingException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
+use Prism\Prism\ValueObjects\Messages\AssistantMessage;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Usage;
 use ReflectionMethod;
@@ -321,9 +324,190 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $request = AiWorkflowRequest::first();
         $this->assertNotNull($request);
         $this->assertSame('Rejected', $request->error);
+        $this->assertSame('Bad content', $request->response_text);
+        $this->assertSame('stop', $request->finish_reason);
         $this->assertSame(80, $request->input_tokens);
         $this->assertSame(20, $request->output_tokens);
         $this->assertSame(5, $request->thought_tokens);
+    }
+
+    public function test_rejected_response_usage_is_added_to_usage_the_exception_already_carries(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Bad content')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(80, 20)),
+        ]);
+
+        $service = app(AiService::class);
+        $service->addMiddleware(new class extends OutputGuardrail
+        {
+            protected function validate(AiWorkflowContext $context): void
+            {
+                $violation = new GuardrailViolationException('moderation', GuardrailDirection::Output, 'Rejected');
+                $violation->recordUsage(new Usage(5, 1));
+
+                throw $violation;
+            }
+        });
+
+        try {
+            $service->sendMessages(collect([new UserMessage('Hi')]), $this->makePrompt());
+            $this->fail('Expected GuardrailViolationException');
+        } catch (GuardrailViolationException $e) {
+            $this->assertEquals(new Usage(85, 21), $e->usage());
+        }
+    }
+
+    public function test_structured_failure_is_logged_with_the_input_middleware_sent(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'leaked'])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(80, 20)),
+        ]);
+
+        $service = app(AiService::class);
+        $service->addMiddleware(new class implements AiWorkflowMiddleware
+        {
+            public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+            {
+                $context->systemPrompt = 'Redacted system prompt.';
+                $context->messages = [new UserMessage('[redacted]')];
+
+                return $next($context);
+            }
+        });
+        $service->addMiddleware(new class extends OutputGuardrail
+        {
+            protected function validate(AiWorkflowContext $context): void
+            {
+                throw new GuardrailViolationException('content-filter', GuardrailDirection::Output, 'Rejected');
+            }
+        });
+
+        try {
+            $service->sendStructuredMessages(collect([new UserMessage('My card is 4111 1111 1111 1111')]), $this->makePrompt(), $this->makeSchema());
+            $this->fail('Expected GuardrailViolationException');
+        } catch (GuardrailViolationException) {
+        }
+
+        $request = AiWorkflowRequest::query()->sole();
+        $this->assertSame('Redacted system prompt.', $request->system_prompt);
+        $this->assertSame([['type' => 'user', 'content' => '[redacted]']], $request->messages);
+        $this->assertSame(['answer' => 'leaked'], $request->structured_response);
+        $this->assertSame(80, $request->input_tokens);
+    }
+
+    public function test_structured_fallback_runs_through_middleware_and_logs_both_requests(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => ['likelihood' => INF]])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'from fallback'])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(90, 30)),
+        ]);
+
+        $middleware = new class implements AiWorkflowMiddleware
+        {
+            /** @var list<string> */
+            public array $sentMessages = [];
+
+            public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+            {
+                $context->messages = [new UserMessage('[redacted]')];
+                $context = $next($context);
+                $this->sentMessages[] = $context->messages[0] instanceof UserMessage ? $context->messages[0]->content : '';
+
+                return $context;
+            }
+        };
+
+        $service = app(AiService::class);
+        $service->addMiddleware($middleware);
+
+        $response = $service->sendStructuredMessages(
+            collect([new UserMessage('Secret')]),
+            $this->makePrompt(fallbackModel: 'openrouter:fallback-model'),
+            $this->makeSchema(),
+        );
+
+        $this->assertSame(['answer' => 'from fallback'], $response->structured);
+        $this->assertSame(['[redacted]'], $middleware->sentMessages);
+
+        $requests = AiWorkflowRequest::query()->orderBy('id')->get();
+        $this->assertCount(2, $requests);
+        $this->assertSame('test-model', $requests[0]->model);
+        $this->assertSame(PrismStructuredDecodingException::class, $requests[0]->error_class);
+        $this->assertSame('fallback-model', $requests[1]->model);
+        $this->assertNull($requests[1]->error);
+        $this->assertSame([['type' => 'user', 'content' => '[redacted]']], $requests[1]->messages);
+        $this->assertSame(90, $requests[1]->input_tokens);
+    }
+
+    public function test_structured_step_with_tools_logs_a_response_rejected_for_its_finish_reason(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('The answer is 42')
+                ->withMessages(collect([new AssistantMessage('The answer is 42')]))
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => '42'])
+                ->withFinishReason(FinishReason::Unknown)
+                ->withUsage(new Usage(90, 30)),
+        ]);
+
+        try {
+            app(AiService::class)->sendStructuredMessagesWithTools(collect([new UserMessage('What is the answer?')]), $this->makePrompt(), $this->makeSchema());
+            $this->fail('Expected PrismException');
+        } catch (PrismException) {
+        }
+
+        $request = AiWorkflowRequest::query()->where('method', 'sendStructuredMessagesWithTools')->sole();
+        $this->assertNotNull($request->error);
+        $this->assertSame(['answer' => '42'], $request->structured_response);
+        $this->assertSame(90, $request->input_tokens);
+    }
+
+    public function test_structured_step_with_tools_logs_a_failed_fallback(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('The answer is 42')
+                ->withMessages(collect([new AssistantMessage('The answer is 42')]))
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => ['likelihood' => INF]])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => '42'])
+                ->withFinishReason(FinishReason::Unknown)
+                ->withUsage(new Usage(90, 30)),
+        ]);
+
+        try {
+            app(AiService::class)->sendStructuredMessagesWithTools(
+                collect([new UserMessage('What is the answer?')]),
+                $this->makePrompt(fallbackModel: 'openrouter:fallback-model'),
+                $this->makeSchema(),
+            );
+            $this->fail('Expected PrismException');
+        } catch (PrismException $e) {
+            $this->assertNotInstanceOf(PrismStructuredDecodingException::class, $e);
+        }
+
+        $requests = AiWorkflowRequest::query()->where('method', 'sendStructuredMessagesWithTools')->orderBy('id')->get();
+        $this->assertCount(2, $requests);
+        $this->assertSame(PrismStructuredDecodingException::class, $requests[0]->error_class);
+        $this->assertSame('fallback-model', $requests[1]->model);
+        $this->assertNotNull($requests[1]->error);
+        $this->assertSame(90, $requests[1]->input_tokens);
     }
 
     public function test_a_throwing_completed_listener_does_not_log_a_failed_text_request(): void

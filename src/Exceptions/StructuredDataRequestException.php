@@ -15,7 +15,9 @@ class StructuredDataRequestException extends AiWorkflowException
         Usage $usage,
         Throwable $previous,
     ) {
-        parent::__construct($message, 0, $previous);
+        $code = $previous->getCode();
+
+        parent::__construct($message, is_int($code) ? $code : 0, $previous);
 
         $this->recordUsage($usage);
     }

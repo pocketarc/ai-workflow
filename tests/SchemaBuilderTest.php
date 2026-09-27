@@ -28,6 +28,7 @@ use AiWorkflow\Tests\Fixtures\Data\ValidatedConfidenceData;
 use Closure;
 use Exception;
 use Prism\Prism\Enums\FinishReason;
+use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ArraySchema;
@@ -38,6 +39,7 @@ use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Usage;
+use RuntimeException;
 
 class SchemaBuilderTest extends TestCase
 {
@@ -547,6 +549,55 @@ class SchemaBuilderTest extends TestCase
             $this->assertEquals(new Usage(100, 50), $e->usage());
             $this->assertInstanceOf(Exception::class, $e->getPrevious());
             $this->assertSame($e->getPrevious()->getMessage(), $e->getMessage());
+        }
+    }
+
+    public function test_send_structured_data_counts_a_response_rejected_for_its_finish_reason(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50)),
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'negative', 'confidence' => 0.8])
+                ->withFinishReason(FinishReason::Error)
+                ->withUsage(new Usage(120, 60)),
+        ]);
+
+        try {
+            app(AiService::class)->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+            );
+            $this->fail('Expected StructuredDataRequestException');
+        } catch (StructuredDataRequestException $e) {
+            $this->assertEquals(new Usage(220, 110), $e->usage());
+            $this->assertInstanceOf(PrismException::class, $e->getPrevious());
+        }
+    }
+
+    public function test_structured_data_request_exception_keeps_the_original_code(): void
+    {
+        $service = app(AiService::class);
+        $service->addMiddleware(new class implements AiWorkflowMiddleware
+        {
+            public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+            {
+                throw new RuntimeException('Too many requests', 429);
+            }
+        });
+
+        try {
+            $service->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+            );
+            $this->fail('Expected StructuredDataRequestException');
+        } catch (StructuredDataRequestException $e) {
+            $this->assertSame(429, $e->getCode());
         }
     }
 

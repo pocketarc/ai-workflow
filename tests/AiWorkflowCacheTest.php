@@ -6,7 +6,11 @@ namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
 use AiWorkflow\AiWorkflowCache;
+use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use AiWorkflow\Tests\Fixtures\Data\SentimentData;
+use Closure;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ObjectSchema;
@@ -200,5 +204,54 @@ class AiWorkflowCacheTest extends TestCase
         $this->assertSame(100, $response2->usage->completionTokens);
         $this->assertSame('req-456', $response2->meta->id);
         $this->assertSame('claude-4', $response2->meta->model);
+    }
+
+    public function test_send_structured_data_caches_only_the_validated_answer(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50)),
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'positive', 'confidence' => 0.9])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(120, 60)),
+        ]);
+
+        $service = app(AiService::class);
+        $prompt = $this->makePrompt(cacheTtl: 3600);
+
+        $first = $service->sendStructuredData(collect([new UserMessage('Analyze')]), $prompt, SentimentData::class);
+        $this->assertEquals(new Usage(220, 110), $first->usage);
+
+        $second = $service->sendStructuredData(collect([new UserMessage('Analyze')]), $prompt, SentimentData::class);
+        $this->assertInstanceOf(SentimentData::class, $second->data);
+        $this->assertSame('positive', $second->data->sentiment);
+        $this->assertEquals(new Usage(0, 0), $second->usage);
+    }
+
+    public function test_cache_hits_when_middleware_rewrites_the_messages(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()->withText('Original response')->withFinishReason(FinishReason::Stop),
+        ]);
+
+        $service = app(AiService::class);
+        $service->addMiddleware(new class implements AiWorkflowMiddleware
+        {
+            public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+            {
+                $context->messages = [new UserMessage('[redacted]')];
+
+                return $next($context);
+            }
+        });
+        $prompt = $this->makePrompt(cacheTtl: 3600);
+
+        $service->sendMessages(collect([new UserMessage('Secret')]), $prompt);
+        $response = $service->sendMessages(collect([new UserMessage('Secret')]), $prompt);
+
+        $this->assertSame('Original response', $response->text);
     }
 }
