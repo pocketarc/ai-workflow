@@ -358,7 +358,7 @@ AI_WORKFLOW_CACHE=true
 AI_WORKFLOW_CACHE_STORE=redis  # optional, defaults to your app's default cache store
 ```
 
-On a cache hit, no API call is made and no log record is created. `sendStructuredData()` caches a response only after it passes validation, and the result's `usage` includes no tokens for an attempt served from the cache.
+On a cache hit, no API call is made and no log record is created. `sendStructuredData()` caches a response only after it passes validation, and the result's `usage` includes no tokens for an attempt served from the cache. If a cache write fails, `AiService` passes the exception to Laravel's `report()` and still returns the response.
 
 ## Middleware
 

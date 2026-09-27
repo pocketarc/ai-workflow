@@ -516,12 +516,6 @@ class AiService
                 // lands in the catch below and is fed back to the model on the next attempt.
                 /** @var T */
                 $data = $dataClass::validateAndCreate($payload);
-
-                if ($providerUsage !== null) {
-                    $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
-                }
-
-                return new StructuredDataResult($data, $response, $usage);
             } catch (Throwable $e) {
                 if ($attempt === $maxAttempts) {
                     throw new StructuredValidationException($e->getMessage(), $attempt, $e, $usage);
@@ -532,7 +526,15 @@ class AiService
                     new AssistantMessage(json_encode($response->structured, JSON_THROW_ON_ERROR)),
                     new UserMessage("The previous response failed validation: {$e->getMessage()}. Please fix the response and try again."),
                 ]);
+
+                continue;
             }
+
+            if ($providerUsage !== null) {
+                $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
+            }
+
+            return new StructuredDataResult($data, $response, $usage);
         }
 
         throw new StructuredValidationException('Max attempts reached', $maxAttempts, usage: $usage);
@@ -610,6 +612,8 @@ class AiService
         $integration = null;
         $breaker = null;
         $streamBegan = false;
+        $endEvent = null;
+        $durationMs = 0.0;
 
         try {
             // Resolve inside the try so a managed-provider misconfiguration is
@@ -634,11 +638,11 @@ class AiService
                 yield $event;
 
                 if ($event instanceof StreamEndEvent) {
+                    $endEvent = $event;
                     $durationMs = (microtime(true) - $startTime) * 1000;
 
                     $this->logUnexpectedFinishReason($event->finishReason, $prompt, 'streamMessages');
                     $this->logStreamRequest($prompt, $provider, $model, $systemPrompt, $messages->all(), $event, $durationMs);
-                    $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $event->finishReason, $event->usage ?? new Usage(0, 0), $durationMs);
                 }
             }
 
@@ -660,6 +664,10 @@ class AiService
             $this->dispatchFailedEvent($prompt, 'streamMessages', $model, $exception, $durationMs);
 
             throw $exception;
+        }
+
+        if ($endEvent !== null) {
+            $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $endEvent->finishReason, $endEvent->usage ?? new Usage(0, 0), $durationMs);
         }
     }
 
@@ -1089,7 +1097,7 @@ class AiService
         }
 
         $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages);
-        $this->cache->put($key, [
+        $this->writeCache($key, [
             'text' => $response->text,
             'finish_reason' => $response->finishReason->value,
             'usage' => [
@@ -1155,7 +1163,7 @@ class AiService
         }
 
         $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages, $schema);
-        $this->cache->put($key, [
+        $this->writeCache($key, [
             'structured' => $response->structured,
             'finish_reason' => $response->finishReason->value,
             'usage' => [
@@ -1168,6 +1176,18 @@ class AiService
                 'model' => $response->meta->model,
             ],
         ], $prompt->cacheTtl);
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseData
+     */
+    private function writeCache(string $key, array $responseData, int $ttlSeconds): void
+    {
+        try {
+            $this->cache->put($key, $responseData, $ttlSeconds);
+        } catch (Throwable $e) {
+            report($e);
+        }
     }
 
     /**
