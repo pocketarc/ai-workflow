@@ -5,7 +5,13 @@ declare(strict_types=1);
 namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Enums\GuardrailDirection;
+use AiWorkflow\Exceptions\GuardrailViolationException;
+use AiWorkflow\Exceptions\StructuredDataRequestException;
 use AiWorkflow\Exceptions\StructuredValidationException;
+use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\AiWorkflowMiddleware;
+use AiWorkflow\Middleware\InputGuardrail;
 use AiWorkflow\PromptData;
 use AiWorkflow\SchemaBuilder;
 use AiWorkflow\StructuredDataResult;
@@ -18,7 +24,10 @@ use AiWorkflow\Tests\Fixtures\Data\SentimentData;
 use AiWorkflow\Tests\Fixtures\Data\TeamData;
 use AiWorkflow\Tests\Fixtures\Data\TypedSentimentData;
 use AiWorkflow\Tests\Fixtures\Data\ValidatedConfidenceData;
+use Closure;
+use Exception;
 use Prism\Prism\Enums\FinishReason;
+use Prism\Prism\Exceptions\PrismRateLimitedException;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\EnumSchema;
@@ -513,5 +522,75 @@ class SchemaBuilderTest extends TestCase
         } catch (StructuredValidationException $e) {
             $this->assertEquals(new Usage(220, 110, cacheWriteInputTokens: 40), $e->usage);
         }
+    }
+
+    public function test_send_structured_data_wraps_a_failed_request_with_the_usage_of_earlier_attempts(): void
+    {
+        // Attempt 2 throws because the fake has no second response queued.
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50)),
+        ]);
+
+        try {
+            app(AiService::class)->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+            );
+            $this->fail('Expected StructuredDataRequestException');
+        } catch (StructuredDataRequestException $e) {
+            $this->assertSame(2, $e->attempts);
+            $this->assertEquals(new Usage(100, 50), $e->usage);
+            $this->assertInstanceOf(Exception::class, $e->getPrevious());
+            $this->assertSame($e->getPrevious()->getMessage(), $e->getMessage());
+        }
+    }
+
+    public function test_send_structured_data_wraps_a_failed_first_request_too(): void
+    {
+        $service = app(AiService::class);
+        $service->addMiddleware(new class implements AiWorkflowMiddleware
+        {
+            public function handle(AiWorkflowContext $context, Closure $next): AiWorkflowContext
+            {
+                throw PrismRateLimitedException::make();
+            }
+        });
+
+        try {
+            $service->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+            );
+            $this->fail('Expected StructuredDataRequestException');
+        } catch (StructuredDataRequestException $e) {
+            $this->assertSame(1, $e->attempts);
+            $this->assertEquals(new Usage(0, 0), $e->usage);
+            $this->assertInstanceOf(PrismRateLimitedException::class, $e->getPrevious());
+        }
+    }
+
+    public function test_send_structured_data_does_not_wrap_a_guardrail_violation(): void
+    {
+        $service = app(AiService::class);
+        $service->addMiddleware(new class extends InputGuardrail
+        {
+            protected function validate(AiWorkflowContext $context): void
+            {
+                throw new GuardrailViolationException('test-guardrail', GuardrailDirection::Input, 'Blocked by test');
+            }
+        });
+
+        $this->expectException(GuardrailViolationException::class);
+
+        $service->sendStructuredData(
+            collect([new UserMessage('Analyze')]),
+            new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+            SentimentData::class,
+        );
     }
 }

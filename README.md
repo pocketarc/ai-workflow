@@ -172,7 +172,7 @@ $result->response;  // the Prism structured response from the attempt that passe
 $result->usage;     // token usage summed across every attempt
 ```
 
-On validation failure, `sendStructuredData()` appends the error to the conversation and sends the request again. It makes at most `$maxAttempts` attempts (default 3). If no attempt passes, it throws `StructuredValidationException`. The exception's `usage` property contains the token usage summed across every attempt.
+On validation failure, `sendStructuredData()` appends the error to the conversation and sends the request again. It makes at most `$maxAttempts` attempts (default 3). If no attempt passes, it throws `StructuredValidationException`. The exception's `usage` property contains the token usage summed across every attempt. If a request fails for another reason, such as a provider error, `sendStructuredData()` throws `StructuredDataRequestException`. Its `usage` property contains the token usage summed across the attempts that completed before the failure, and `getPrevious()` returns the original exception. `sendStructuredData()` does not wrap exceptions that extend `AiWorkflowException`, such as `GuardrailViolationException`.
 
 ### Streaming
 
@@ -604,7 +604,7 @@ OpenRouter calls run through laravel-integrations, which owns the circuit breake
 - **429** is a throttle: retried (honouring `Retry-After`) without tripping the breaker.
 - **5xx, connection errors, and timeouts** are upstream faults: retried with backoff and counted toward the breaker.
 
-Backoff is a fixed ~30s pause on rate limits and ~attempt x 2s on server errors, with optional ±25% jitter. Tune it via `ai-workflow.retry`: `times` sets the max attempts, and `rate_limit_delay_ms`, `server_error_multiplier_ms`, and `jitter` shape the backoff. When retries are exhausted, the underlying Prism exception propagates.
+Backoff is a fixed ~30s pause on rate limits and ~attempt x 2s on server errors, with optional ±25% jitter. Tune it via `ai-workflow.retry`: `times` sets the max attempts, and `rate_limit_delay_ms`, `server_error_multiplier_ms`, and `jitter` shape the backoff. When retries are exhausted, `AiService` throws the underlying Prism exception. `sendStructuredData()` throws it wrapped in `StructuredDataRequestException`.
 
 The breaker state, rate budget, and transport audit live on the integration row.
 

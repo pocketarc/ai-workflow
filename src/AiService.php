@@ -6,12 +6,15 @@ namespace AiWorkflow;
 
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Exceptions\AiWorkflowException;
+use AiWorkflow\Exceptions\StructuredDataRequestException;
 use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Closure;
+use Exception;
 use Generator;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Collection;
@@ -438,7 +441,14 @@ class AiService
         $usage = new Usage(0, 0);
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
+            try {
+                $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
+            } catch (AiWorkflowException $e) {
+                throw $e;
+            } catch (Exception $e) {
+                throw new StructuredDataRequestException($e->getMessage(), $attempt, $usage, $e);
+            }
+
             $usage = $this->addUsage($usage, $response->usage);
 
             try {
