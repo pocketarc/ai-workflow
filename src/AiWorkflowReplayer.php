@@ -9,6 +9,7 @@ use AiWorkflow\Models\AiWorkflowRequest;
 use Prism\Prism\Contracts\Message;
 use Prism\Prism\Contracts\Schema;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Schema\AnyOfSchema;
 use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\BooleanSchema;
 use Prism\Prism\Schema\EnumSchema;
@@ -215,9 +216,6 @@ class AiWorkflowReplayer
         return StructuredResponseGuard::rejectNonFiniteNumbers($builder->asStructured());
     }
 
-    /**
-     * Rebuild the schema a structured request was sent with.
-     */
     private function reconstructSchema(AiWorkflowRequest $request): Schema
     {
         $schemaData = $request->schema;
@@ -231,7 +229,17 @@ class AiWorkflowReplayer
             );
         }
 
-        return $this->buildSchema($request->schema_name ?? 'schema', $schemaData);
+        return $this->buildSchema($request->schema_name ?? 'schema', $schemaData, $this->restoresPropertyOrder($request));
+    }
+
+    /**
+     * Whether to put each object's properties back in the order of its `required` list.
+     *
+     * Assumes `required` lists the properties in the order they were sent.
+     */
+    protected function restoresPropertyOrder(AiWorkflowRequest $request): bool
+    {
+        return $request->getConnection()->getDriverName() === 'mysql';
     }
 
     /**
@@ -244,9 +252,9 @@ class AiWorkflowReplayer
      *
      * @param  array<string, mixed>  $data
      */
-    private function buildSchema(string $name, array $data): Schema
+    private function buildSchema(string $name, array $data, bool $restorePropertyOrder): Schema
     {
-        $schema = $this->buildTypedSchema($name, $data);
+        $schema = $this->buildTypedSchema($name, $data, $restorePropertyOrder);
 
         if ($schema instanceof Schema && $this->matchesRecorded($schema, $data)) {
             return $schema;
@@ -256,8 +264,6 @@ class AiWorkflowReplayer
     }
 
     /**
-     * Whether a rebuilt schema's toArray() matches the recorded array.
-     *
      * @param  array<string, mixed>  $data
      */
     private function matchesRecorded(Schema $schema, array $data): bool
@@ -270,8 +276,12 @@ class AiWorkflowReplayer
     /**
      * @param  array<string, mixed>  $data
      */
-    private function buildTypedSchema(string $name, array $data): ?Schema
+    private function buildTypedSchema(string $name, array $data, bool $restorePropertyOrder): ?Schema
     {
+        if (array_key_exists('anyOf', $data)) {
+            return $this->buildAnyOfSchema($name, $data, $restorePropertyOrder);
+        }
+
         $description = $data['description'] ?? null;
 
         if (! is_string($description)) {
@@ -285,8 +295,8 @@ class AiWorkflowReplayer
         }
 
         return match ($type) {
-            'object' => $this->buildObjectSchema($name, $description, $data, $nullable),
-            'array' => $this->buildArraySchema($name, $description, $data, $nullable),
+            'object' => $this->buildObjectSchema($name, $description, $data, $nullable, $restorePropertyOrder),
+            'array' => $this->buildArraySchema($name, $description, $data, $nullable, $restorePropertyOrder),
             'number' => new NumberSchema(
                 name: $name,
                 description: $description,
@@ -353,7 +363,7 @@ class AiWorkflowReplayer
     /**
      * @param  array<string, mixed>  $data
      */
-    private function buildObjectSchema(string $name, string $description, array $data, bool $nullable): ?ObjectSchema
+    private function buildObjectSchema(string $name, string $description, array $data, bool $nullable, bool $restorePropertyOrder): ?ObjectSchema
     {
         $propertiesData = $this->stringKeyed($data['properties'] ?? []);
         $requiredData = $data['required'] ?? [];
@@ -382,7 +392,11 @@ class AiWorkflowReplayer
                 return null;
             }
 
-            $properties[] = $this->buildSchema($propertyName, $property);
+            $properties[] = $this->buildSchema($propertyName, $property, $restorePropertyOrder);
+        }
+
+        if ($restorePropertyOrder) {
+            $properties = $this->orderByRequiredFields($properties, $requiredFields);
         }
 
         return new ObjectSchema(
@@ -398,7 +412,7 @@ class AiWorkflowReplayer
     /**
      * @param  array<string, mixed>  $data
      */
-    private function buildArraySchema(string $name, string $description, array $data, bool $nullable): ?ArraySchema
+    private function buildArraySchema(string $name, string $description, array $data, bool $nullable, bool $restorePropertyOrder): ?ArraySchema
     {
         $items = $this->stringKeyed($data['items'] ?? null);
 
@@ -409,11 +423,82 @@ class AiWorkflowReplayer
         return new ArraySchema(
             name: $name,
             description: $description,
-            items: $this->buildSchema('item', $items),
+            items: $this->buildSchema('item', $items, $restorePropertyOrder),
             nullable: $nullable,
             minItems: $this->intOrNull($data['minItems'] ?? null),
             maxItems: $this->intOrNull($data['maxItems'] ?? null),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function buildAnyOfSchema(string $name, array $data, bool $restorePropertyOrder): ?AnyOfSchema
+    {
+        $options = $data['anyOf'] ?? null;
+        $description = $data['description'] ?? null;
+
+        if (! is_array($options) || ! array_is_list($options) || ($description !== null && ! is_string($description))) {
+            return null;
+        }
+
+        $nullable = $options !== [] && $options[array_key_last($options)] === ['type' => 'null'];
+
+        if ($nullable) {
+            array_pop($options);
+        }
+
+        $schemas = [];
+
+        foreach ($options as $option) {
+            $optionData = $this->stringKeyed($option);
+
+            // AnyOfSchema::toArray() throws for an option without "type", "anyOf" or "oneOf".
+            if ($optionData === null || ($optionData['type'] ?? $optionData['anyOf'] ?? $optionData['oneOf'] ?? null) === null) {
+                return null;
+            }
+
+            $schemas[] = $this->buildSchema('item', $optionData, $restorePropertyOrder);
+        }
+
+        return new AnyOfSchema($schemas, $name, $description, $nullable);
+    }
+
+    /**
+     * @param  list<Schema>  $properties
+     * @param  list<string>  $requiredFields
+     * @return list<Schema>
+     */
+    private function orderByRequiredFields(array $properties, array $requiredFields): array
+    {
+        $byName = [];
+
+        foreach ($properties as $property) {
+            $byName[$property->name()] = $property;
+        }
+
+        $names = array_map(strval(...), array_keys($byName));
+        $required = $requiredFields;
+        sort($names);
+        sort($required);
+
+        if (count($byName) !== count($properties) || $names !== $required) {
+            return $properties;
+        }
+
+        $ordered = [];
+
+        foreach ($requiredFields as $field) {
+            $property = $byName[$field] ?? null;
+
+            if ($property === null) {
+                return $properties;
+            }
+
+            $ordered[] = $property;
+        }
+
+        return $ordered;
     }
 
     /**

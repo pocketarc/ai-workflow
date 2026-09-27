@@ -8,10 +8,12 @@ use AiWorkflow\AiService;
 use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
+use AiWorkflow\PromptService;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use Prism\Prism\Contracts\Schema;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Schema\AnyOfSchema;
 use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\BooleanSchema;
 use Prism\Prism\Schema\EnumSchema;
@@ -374,6 +376,48 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
         });
     }
 
+    public function test_replay_structured_restores_property_order_from_required_where_the_database_sorts_keys(): void
+    {
+        $this->app->instance(AiWorkflowReplayer::class, new class(app(PromptService::class)) extends AiWorkflowReplayer
+        {
+            protected function restoresPropertyOrder(AiWorkflowRequest $request): bool
+            {
+                return true;
+            }
+        });
+
+        $schema = $this->makeReplayableSchema();
+
+        $fake = $this->replayStructuredWithSchema($this->reverseKeysRecursively($schema->toArray()), $schema->name());
+
+        $fake->assertRequest(function (array $requests) use ($schema): void {
+            $this->assertEquals($schema, $requests[0]->schema());
+        });
+    }
+
+    public function test_replay_structured_sends_an_any_of_with_an_untyped_option_as_recorded(): void
+    {
+        $recorded = [
+            'description' => 'Statistics',
+            'type' => 'object',
+            'properties' => [
+                'value' => ['anyOf' => [['description' => 'Anything']], 'description' => 'A value'],
+            ],
+            'required' => ['value'],
+            'additionalProperties' => false,
+        ];
+
+        $fake = $this->replayStructuredWithSchema($recorded);
+
+        $fake->assertRequest(function (array $requests) use ($recorded): void {
+            $sent = $requests[0]->schema();
+
+            $this->assertInstanceOf(ObjectSchema::class, $sent);
+            $this->assertInstanceOf(RawSchema::class, $sent->properties[0]);
+            $this->assertSame($recorded, $sent->toArray());
+        });
+    }
+
     public function test_replay_structured_sends_nodes_it_cannot_rebuild_exactly_as_recorded(): void
     {
         $recorded = [
@@ -465,8 +509,17 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
                     requiredFields: ['email'],
                     nullable: true,
                 ),
+                new AnyOfSchema(
+                    schemas: [
+                        new StringSchema('item', 'A queue name'),
+                        new NumberSchema('item', 'An agent ID', minimum: 1.0),
+                    ],
+                    name: 'assignee',
+                    description: 'Who should pick it up',
+                    nullable: true,
+                ),
             ],
-            requiredFields: ['priority', 'confidence', 'needs_human', 'reference', 'tags', 'actions', 'customer'],
+            requiredFields: ['priority', 'confidence', 'needs_human', 'reference', 'tags', 'actions', 'customer', 'assignee'],
         );
     }
 

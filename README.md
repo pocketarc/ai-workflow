@@ -460,6 +460,8 @@ $results = $replayer->replayAcrossModels($request, [
 $results = $replayer->replayExecution($execution, useCurrentPrompts: true);
 ```
 
+Structured requests are replayed with the schema and schema name they were sent with. MySQL stores the keys of a JSON object in sorted order, so on MySQL the replayer restores each object's property order from its `required` list. This works when `required` lists every property in the same order as `properties`, as the schemas generated from Laravel Data classes do.
+
 ## Eval Framework
 
 Evaluate AI outputs by replaying recorded requests from curated datasets across models with pluggable judges.
