@@ -7,6 +7,7 @@ namespace AiWorkflow;
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
 use AiWorkflow\Exceptions\AiWorkflowException;
+use AiWorkflow\Exceptions\GuardrailViolationException;
 use AiWorkflow\Exceptions\StructuredDataRequestException;
 use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
@@ -443,6 +444,10 @@ class AiService
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             try {
                 $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
+            } catch (GuardrailViolationException $e) {
+                $e->recordUsage($usage);
+
+                throw $e;
             } catch (AiWorkflowException $e) {
                 throw $e;
             } catch (Exception $e) {

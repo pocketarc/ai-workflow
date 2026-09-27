@@ -593,4 +593,47 @@ class SchemaBuilderTest extends TestCase
             SentimentData::class,
         );
     }
+
+    public function test_send_structured_data_adds_earlier_usage_to_a_guardrail_violation(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50)),
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.6])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(120, 60)),
+        ]);
+
+        $guardrail = new class extends InputGuardrail
+        {
+            public ?GuardrailViolationException $thrown = null;
+
+            private int $calls = 0;
+
+            protected function validate(AiWorkflowContext $context): void
+            {
+                if (++$this->calls === 3) {
+                    throw $this->thrown = new GuardrailViolationException('test-guardrail', GuardrailDirection::Input, 'Blocked by test');
+                }
+            }
+        };
+
+        $service = app(AiService::class);
+        $service->addMiddleware($guardrail);
+
+        try {
+            $service->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+            );
+            $this->fail('Expected GuardrailViolationException');
+        } catch (GuardrailViolationException $e) {
+            $this->assertSame($guardrail->thrown, $e);
+            $this->assertEquals(new Usage(220, 110), $e->usage());
+        }
+    }
 }
