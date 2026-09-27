@@ -164,12 +164,17 @@ $result = $aiService->sendStructuredData(
     SentimentAnalysis::class,
 );
 
-// $result is a validated SentimentAnalysis instance
-echo $result->sentiment;   // "positive"
-echo $result->confidence;  // 0.95
+// $result->data is a validated SentimentAnalysis instance
+echo $result->data->sentiment;   // "positive"
+echo $result->data->confidence;  // 0.95
+
+$result->response;  // the Prism structured response from the attempt that passed
+$result->usage;     // token usage summed across every attempt
 ```
 
-On validation failure, the package appends the error to the conversation and retries up to `$maxAttempts` (default 3).
+On validation failure, `sendStructuredData()` appends the error to the conversation and sends the request again. It makes at most `$maxAttempts` attempts (default 3). If no attempt passes validation, it throws `StructuredValidationException`. If an attempt fails with an exception that extends `AiWorkflowException`, such as `GuardrailViolationException`, `sendStructuredData()` rethrows the same exception instance. If an attempt throws any other exception, such as a provider error, `sendStructuredData()` throws `StructuredDataRequestException`, and `getPrevious()` returns the original exception.
+
+Every exception that extends `AiWorkflowException` has a `usage()` method. It returns the token usage of the responses that were received before the exception was thrown, including a response that an `OutputGuardrail` rejected. For an exception from `sendStructuredData()`, the usage is summed across every attempt. No tokens are counted for an attempt that fails at the provider. Outside `sendStructuredData()`, `usage()` returns `null` if no response was received, for example when an `InputGuardrail` blocks a `sendMessages()` call.
 
 ### Streaming
 
@@ -256,7 +261,7 @@ AiWorkflowRequest::query()->errors()->get();
 
 ## Request Logging
 
-When enabled, every AI call is recorded to the database with enough detail to replay it: system prompt, messages, model, provider, schema, response, token usage, duration, and tags.
+When enabled, every AI call is recorded to the database with enough detail to replay it: system prompt, messages, model, provider, schema, response, token usage, duration, and tags. A failed call is recorded with its error. If the response was rejected by a middleware, such as an output guardrail, or because of its finish reason, the row also includes that response and its token usage.
 
 Enable logging in your `.env`:
 
@@ -325,11 +330,11 @@ A ready-to-use listener adds Sentry breadcrumbs for AI requests. Register in you
 ```php
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
-use AiWorkflow\Listeners\SentrySpanListener;
+use AiWorkflow\Listeners\SentryBreadcrumbListener;
 
 protected $listen = [
-    AiWorkflowRequestCompleted::class => [SentrySpanListener::class . '@handleCompleted'],
-    AiWorkflowRequestFailed::class => [SentrySpanListener::class . '@handleFailed'],
+    AiWorkflowRequestCompleted::class => [SentryBreadcrumbListener::class . '@handleCompleted'],
+    AiWorkflowRequestFailed::class => [SentryBreadcrumbListener::class . '@handleFailed'],
 ];
 ```
 
@@ -353,7 +358,7 @@ AI_WORKFLOW_CACHE=true
 AI_WORKFLOW_CACHE_STORE=redis  # optional, defaults to your app's default cache store
 ```
 
-Cache hits skip the API call entirely and do not create log records.
+On a cache hit, no API call is made and no log record is created. `sendStructuredData()` caches a response only after it passes validation, and the result's `usage` includes no tokens for an attempt served from the cache.
 
 ## Middleware
 
@@ -454,6 +459,8 @@ $results = $replayer->replayAcrossModels($request, [
 // Replay an entire execution — each request loads its own prompt via prompt_id
 $results = $replayer->replayExecution($execution, useCurrentPrompts: true);
 ```
+
+Structured requests are replayed with the schema and schema name they were sent with. MySQL stores the keys of a JSON object in sorted order, so on MySQL the replayer restores each object's property order from its `required` list. This works when `required` lists every property in the same order as `properties`, as the schemas generated from Laravel Data classes do.
 
 ## Eval Framework
 
@@ -601,13 +608,13 @@ OpenRouter calls run through laravel-integrations, which owns the circuit breake
 - **429** is a throttle: retried (honouring `Retry-After`) without tripping the breaker.
 - **5xx, connection errors, and timeouts** are upstream faults: retried with backoff and counted toward the breaker.
 
-Backoff is a fixed ~30s pause on rate limits and ~attempt x 2s on server errors, with optional ±25% jitter. Tune it via `ai-workflow.retry`: `times` sets the max attempts, and `rate_limit_delay_ms`, `server_error_multiplier_ms`, and `jitter` shape the backoff. When retries are exhausted, the underlying Prism exception propagates.
+Backoff is a fixed ~30s pause on rate limits and ~attempt x 2s on server errors, with optional ±25% jitter. Tune it via `ai-workflow.retry`: `times` sets the max attempts, and `rate_limit_delay_ms`, `server_error_multiplier_ms`, and `jitter` shape the backoff. When retries are exhausted, `AiService` throws the underlying Prism exception. `sendStructuredData()` throws it wrapped in `StructuredDataRequestException`.
 
 The breaker state, rate budget, and transport audit live on the integration row.
 
 ### Fallback Models
 
-If a structured request fails to decode JSON (the model produced invalid output), the package automatically retries with the `fallback_model` if one is configured in the prompt's front-matter.
+If the JSON in a structured response cannot be decoded (the model produced invalid output), the package retries the request with the `fallback_model` configured in the prompt's front-matter, if there is one. The fallback request is run through the same middleware as the original, and both requests are logged.
 
 ## Finish Reason Handling
 

@@ -6,12 +6,15 @@ namespace AiWorkflow;
 
 use AiWorkflow\Events\AiWorkflowRequestCompleted;
 use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Exceptions\AiWorkflowException;
+use AiWorkflow\Exceptions\StructuredDataRequestException;
 use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Closure;
+use Exception;
 use Generator;
 use Illuminate\Pipeline\Pipeline;
 use Illuminate\Support\Collection;
@@ -213,6 +216,7 @@ class AiService
         );
 
         $startTime = microtime(true);
+        $providerResponse = null;
 
         try {
             // Resolve before the cache check so a managed-provider
@@ -228,7 +232,7 @@ class AiService
 
             $resolvedMaxTokens = $prompt->maxTokens ?? $maxTokens['text'];
 
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, $steps, $resolvedMaxTokens, $clientOptions, $integration): AiWorkflowContext {
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($prompt, $provider, $model, $steps, $resolvedMaxTokens, $clientOptions, $integration, &$providerResponse): AiWorkflowContext {
                 $builder = Prism::text()
                     ->using($provider, $model)
                     ->withSystemPrompt($ctx->systemPrompt)
@@ -244,6 +248,7 @@ class AiService
                 }
 
                 $ctx->response = $this->requestText($integration, fn (): Response => $builder->asText());
+                $providerResponse = $ctx->response;
 
                 return $ctx;
             });
@@ -254,17 +259,20 @@ class AiService
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendMessages');
             $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, textResponse: $response);
-            $this->dispatchCompletedEvent($prompt, 'sendMessages', $model, $response->finishReason, $response->usage, $durationMs);
-            $this->cacheTextResponse($provider, $model, $context->systemPrompt, $context->messages, $prompt, $response);
-
-            return $response;
         } catch (Throwable $exception) {
+            $this->recordProviderUsage($exception, $providerResponse?->usage);
+
             $durationMs = (microtime(true) - $startTime) * 1000;
-            $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, error: $exception);
+            $this->logRequest($prompt, 'sendMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, textResponse: $providerResponse, error: $exception);
             $this->dispatchFailedEvent($prompt, 'sendMessages', $model, $exception, $durationMs);
 
             throw $exception;
         }
+
+        $this->dispatchCompletedEvent($prompt, 'sendMessages', $model, $response->finishReason, $response->usage, $durationMs);
+        $this->cacheTextResponse($provider, $model, $systemPrompt, $messages->all(), $prompt, $response);
+
+        return $response;
     }
 
     /**
@@ -279,6 +287,21 @@ class AiService
         ObjectSchema $schema,
         ?string $modelOverride = null,
     ): StructuredResponse {
+        return $this->requestStructuredMessages($messages, $prompt, $schema, $modelOverride);
+    }
+
+    /**
+     * @param  Collection<int, Message>  $messages
+     * @param  (Closure(Usage): void)|null  $onProviderUsage  Not called on a cache hit.
+     */
+    private function requestStructuredMessages(
+        Collection $messages,
+        PromptData $prompt,
+        ObjectSchema $schema,
+        ?string $modelOverride,
+        bool $cacheResponse = true,
+        ?Closure $onProviderUsage = null,
+    ): StructuredResponse {
         $effectiveModelIdentifier = $modelOverride ?? $prompt->model;
         [$provider, $model] = PromptData::parseModelIdentifier($effectiveModelIdentifier);
 
@@ -291,6 +314,7 @@ class AiService
         );
 
         $startTime = microtime(true);
+        $providerResponse = null;
 
         try {
             // Resolve before the cache check so a managed-provider
@@ -303,7 +327,7 @@ class AiService
                 return $cached;
             }
 
-            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, $integration): AiWorkflowContext {
+            $context = $this->runThroughMiddleware($context, function (AiWorkflowContext $ctx) use ($schema, $effectiveModelIdentifier, $integration, &$providerResponse): AiWorkflowContext {
                 $ctx->response = $this->executeStructuredRequest(
                     new Collection($ctx->messages),
                     $ctx->prompt,
@@ -312,6 +336,7 @@ class AiService
                     $ctx->systemPrompt,
                     $integration,
                 );
+                $providerResponse = $ctx->response;
 
                 return $ctx;
             });
@@ -322,27 +347,43 @@ class AiService
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessages');
             $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, structuredResponse: $response, schema: $schema);
-            $this->dispatchCompletedEvent($prompt, 'sendStructuredMessages', $model, $response->finishReason, $response->usage, $durationMs);
-            $this->cacheStructuredResponse($provider, $model, $context->systemPrompt, $context->messages, $prompt, $schema, $response);
-
-            return $response;
         } catch (PrismStructuredDecodingException $decodingException) {
-            if ($modelOverride === null && $prompt->fallbackModel !== null) {
-                return $this->handleStructuredFallback($prompt, $schema, $messages, 'sendStructuredMessages', $prompt->prompt);
-            }
-
             $durationMs = (microtime(true) - $startTime) * 1000;
-            $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, error: $decodingException, schema: $schema);
+            $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, error: $decodingException, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessages', $model, $decodingException, $durationMs);
+
+            if ($modelOverride === null && $prompt->fallbackModel !== null) {
+                $this->logFallback($prompt);
+
+                return $this->requestStructuredMessages($messages, $prompt, $schema, $prompt->fallbackModel, $cacheResponse, $onProviderUsage);
+            }
 
             throw $decodingException;
         } catch (Throwable $exception) {
+            if ($providerResponse !== null && $onProviderUsage !== null) {
+                $onProviderUsage($providerResponse->usage);
+            }
+
+            $this->recordProviderUsage($exception, $providerResponse?->usage);
+
             $durationMs = (microtime(true) - $startTime) * 1000;
-            $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $prompt->prompt, $messages->all(), $durationMs, error: $exception, schema: $schema);
+            $this->logRequest($prompt, 'sendStructuredMessages', $provider, $model, $context->systemPrompt, $context->messages, $durationMs, structuredResponse: $providerResponse, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessages', $model, $exception, $durationMs);
 
             throw $exception;
         }
+
+        if ($onProviderUsage !== null) {
+            $onProviderUsage($response->usage);
+        }
+
+        $this->dispatchCompletedEvent($prompt, 'sendStructuredMessages', $model, $response->finishReason, $response->usage, $durationMs);
+
+        if ($cacheResponse) {
+            $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
+        }
+
+        return $response;
     }
 
     /**
@@ -381,33 +422,40 @@ class AiService
 
         [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
         $startTime = microtime(true);
+        $providerResponse = null;
 
         try {
             $response = $this->executeStructuredRequest($newMessages, $prompt, $schema, $prompt->model, null);
+            $providerResponse = $response;
             $durationMs = (microtime(true) - $startTime) * 1000;
 
             $this->logUnexpectedFinishReason($response->finishReason, $prompt, 'sendStructuredMessagesWithTools');
             $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, structuredResponse: $response, schema: $schema);
-            $this->dispatchCompletedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $response->finishReason, $response->usage, $durationMs);
-
-            return $response;
         } catch (PrismStructuredDecodingException $decodingException) {
-            if ($prompt->fallbackModel !== null) {
-                return $this->handleStructuredFallback($prompt, $schema, $newMessages, 'sendStructuredMessagesWithTools', null);
-            }
-
             $durationMs = (microtime(true) - $startTime) * 1000;
             $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, error: $decodingException, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $decodingException, $durationMs);
 
+            if ($prompt->fallbackModel !== null) {
+                $this->logFallback($prompt);
+
+                return $this->handleStructuredFallback($prompt, $schema, $newMessages, 'sendStructuredMessagesWithTools', null);
+            }
+
             throw $decodingException;
         } catch (Throwable $exception) {
+            $this->recordProviderUsage($exception, $providerResponse?->usage);
+
             $durationMs = (microtime(true) - $startTime) * 1000;
-            $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, error: $exception, schema: $schema);
+            $this->logRequest($prompt, 'sendStructuredMessagesWithTools', $provider, $model, '', $newMessages->all(), $durationMs, structuredResponse: $providerResponse, error: $exception, schema: $schema);
             $this->dispatchFailedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $exception, $durationMs);
 
             throw $exception;
         }
+
+        $this->dispatchCompletedEvent($prompt, 'sendStructuredMessagesWithTools', $model, $response->finishReason, $response->usage, $durationMs);
+
+        return $response;
     }
 
     /**
@@ -432,12 +480,29 @@ class AiService
         }
 
         $schema = SchemaBuilder::fromDataClass($dataClass);
+        [$provider, $model] = PromptData::parseModelIdentifier($prompt->model);
 
         /** @var Collection<int, Message> $attemptMessages */
         $attemptMessages = new Collection($messages->all());
+        $usage = new Usage(0, 0);
 
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $response = $this->sendStructuredMessages($attemptMessages, $prompt, $schema);
+            $providerUsage = null;
+            $recordProviderUsage = function (Usage $attemptUsage) use (&$providerUsage): void {
+                $providerUsage = $attemptUsage;
+            };
+
+            try {
+                $response = $this->requestStructuredMessages($attemptMessages, $prompt, $schema, null, false, $recordProviderUsage);
+            } catch (AiWorkflowException $e) {
+                $e->recordUsage($this->addUsage($usage, $e->usage() ?? new Usage(0, 0)));
+
+                throw $e;
+            } catch (Exception $e) {
+                throw new StructuredDataRequestException($e->getMessage(), $attempt, $this->addUsage($usage, $providerUsage ?? new Usage(0, 0)), $e);
+            }
+
+            $usage = $this->addUsage($usage, $providerUsage ?? new Usage(0, 0));
 
             try {
                 $payload = SchemaBuilder::stripNullsForDefaultedProperties($dataClass, $response->structured);
@@ -452,10 +517,14 @@ class AiService
                 /** @var T */
                 $data = $dataClass::validateAndCreate($payload);
 
-                return new StructuredDataResult($data, $response, $response->usage);
+                if ($providerUsage !== null) {
+                    $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
+                }
+
+                return new StructuredDataResult($data, $response, $usage);
             } catch (Throwable $e) {
                 if ($attempt === $maxAttempts) {
-                    throw new StructuredValidationException($e->getMessage(), $attempt, $e);
+                    throw new StructuredValidationException($e->getMessage(), $attempt, $e, $usage);
                 }
 
                 $attemptMessages = new Collection([
@@ -466,7 +535,36 @@ class AiService
             }
         }
 
-        throw new StructuredValidationException('Max attempts reached', $maxAttempts);
+        throw new StructuredValidationException('Max attempts reached', $maxAttempts, usage: $usage);
+    }
+
+    /**
+     * Add a provider response's token usage to an AiWorkflowException, on top of any usage already recorded on it.
+     */
+    private function recordProviderUsage(Throwable $exception, ?Usage $providerUsage): void
+    {
+        if ($providerUsage === null || ! $exception instanceof AiWorkflowException) {
+            return;
+        }
+
+        $recorded = $exception->usage();
+        $exception->recordUsage($recorded === null ? $providerUsage : $this->addUsage($recorded, $providerUsage));
+    }
+
+    private function addUsage(Usage $total, Usage $usage): Usage
+    {
+        return new Usage(
+            promptTokens: $total->promptTokens + $usage->promptTokens,
+            completionTokens: $total->completionTokens + $usage->completionTokens,
+            cacheWriteInputTokens: $this->addOptionalTokens($total->cacheWriteInputTokens, $usage->cacheWriteInputTokens),
+            cacheReadInputTokens: $this->addOptionalTokens($total->cacheReadInputTokens, $usage->cacheReadInputTokens),
+            thoughtTokens: $this->addOptionalTokens($total->thoughtTokens, $usage->thoughtTokens),
+        );
+    }
+
+    private function addOptionalTokens(?int $total, ?int $tokens): ?int
+    {
+        return $tokens === null ? $total : ($total ?? 0) + $tokens;
     }
 
     /**
@@ -828,6 +926,7 @@ class AiService
         }
 
         $httpDetails = $this->extractHttpDetails($error);
+        $usage = $textResponse->usage ?? $structuredResponse?->usage;
 
         AiWorkflowRequest::create([
             'execution_id' => $this->currentExecution?->id,
@@ -840,13 +939,14 @@ class AiService
             'response_text' => $textResponse?->text,
             'structured_response' => $structuredResponse?->structured,
             'finish_reason' => $textResponse?->finishReason->value ?? $structuredResponse?->finishReason->value,
-            'input_tokens' => $textResponse?->usage->promptTokens ?? $structuredResponse?->usage->promptTokens,
-            'output_tokens' => $textResponse?->usage->completionTokens ?? $structuredResponse?->usage->completionTokens,
-            'thought_tokens' => $textResponse?->usage->thoughtTokens ?? $structuredResponse?->usage->thoughtTokens,
-            'cache_read_tokens' => $textResponse?->usage->cacheReadInputTokens ?? $structuredResponse?->usage->cacheReadInputTokens,
-            'cache_write_tokens' => $textResponse?->usage->cacheWriteInputTokens ?? $structuredResponse?->usage->cacheWriteInputTokens,
+            'input_tokens' => $usage?->promptTokens,
+            'output_tokens' => $usage?->completionTokens,
+            'thought_tokens' => $usage?->thoughtTokens,
+            'cache_read_tokens' => $usage?->cacheReadInputTokens,
+            'cache_write_tokens' => $usage?->cacheWriteInputTokens,
             'duration_ms' => (int) $durationMs,
             'schema' => $schema?->toArray(),
+            'schema_name' => $schema?->name(),
             'error' => $error?->getMessage(),
             'error_class' => $error !== null ? $error::class : null,
             'http_status' => $httpDetails['status'],
@@ -1083,26 +1183,42 @@ class AiService
         ?string $systemPrompt,
     ): StructuredResponse {
         $fallbackModelIdentifier = $prompt->fallbackModel ?? throw new \LogicException('handleStructuredFallback called without a fallback model');
+        [$fallbackProvider, $fallbackModel] = PromptData::parseModelIdentifier($fallbackModelIdentifier);
 
+        $fallbackStartTime = microtime(true);
+        $providerResponse = null;
+
+        try {
+            $response = $this->executeStructuredRequest($messages, $prompt, $schema, $fallbackModelIdentifier, $systemPrompt);
+            $providerResponse = $response;
+            $fallbackDurationMs = (microtime(true) - $fallbackStartTime) * 1000;
+
+            $this->logUnexpectedFinishReason($response->finishReason, $prompt, $method);
+            $this->logRequest($prompt, $method, $fallbackProvider, $fallbackModel, $systemPrompt ?? '', $messages->all(), $fallbackDurationMs, structuredResponse: $response, schema: $schema);
+        } catch (Throwable $exception) {
+            $this->recordProviderUsage($exception, $providerResponse?->usage);
+
+            $fallbackDurationMs = (microtime(true) - $fallbackStartTime) * 1000;
+            $this->logRequest($prompt, $method, $fallbackProvider, $fallbackModel, $systemPrompt ?? '', $messages->all(), $fallbackDurationMs, structuredResponse: $providerResponse, error: $exception, schema: $schema);
+            $this->dispatchFailedEvent($prompt, $method, $fallbackModel, $exception, $fallbackDurationMs);
+
+            throw $exception;
+        }
+
+        $this->dispatchCompletedEvent($prompt, $method, $fallbackModel, $response->finishReason, $response->usage, $fallbackDurationMs);
+
+        return $response;
+    }
+
+    private function logFallback(PromptData $prompt): void
+    {
         [, $primaryModel] = PromptData::parseModelIdentifier($prompt->model);
 
         Log::warning('AiWorkflow: Structured decoding failed, switching to fallback model', [
             'prompt_id' => $prompt->id,
             'primary_model' => $primaryModel,
-            'fallback_model' => $fallbackModelIdentifier,
+            'fallback_model' => $prompt->fallbackModel,
         ]);
-
-        [$fallbackProvider, $fallbackModel] = PromptData::parseModelIdentifier($fallbackModelIdentifier);
-
-        $fallbackStartTime = microtime(true);
-        $response = $this->executeStructuredRequest($messages, $prompt, $schema, $fallbackModelIdentifier, $systemPrompt);
-        $fallbackDurationMs = (microtime(true) - $fallbackStartTime) * 1000;
-
-        $this->logUnexpectedFinishReason($response->finishReason, $prompt, $method);
-        $this->logRequest($prompt, $method, $fallbackProvider, $fallbackModel, $systemPrompt ?? '', $messages->all(), $fallbackDurationMs, structuredResponse: $response, schema: $schema);
-        $this->dispatchCompletedEvent($prompt, $method, $fallbackModel, $response->finishReason, $response->usage, $fallbackDurationMs);
-
-        return $response;
     }
 
     private function dispatchCompletedEvent(

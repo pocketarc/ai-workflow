@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace AiWorkflow\Exceptions;
 
+use Prism\Prism\ValueObjects\Usage;
 use Throwable;
 
 class StructuredValidationException extends AiWorkflowException
@@ -12,7 +13,12 @@ class StructuredValidationException extends AiWorkflowException
         string $message,
         public readonly int $attempts,
         ?Throwable $previous = null,
+        ?Usage $usage = null,
     ) {
         parent::__construct($message, 0, $previous);
+
+        if ($usage !== null) {
+            $this->recordUsage($usage);
+        }
     }
 }

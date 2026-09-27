@@ -7,12 +7,15 @@ namespace AiWorkflow;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use Prism\Prism\Contracts\Message;
+use Prism\Prism\Contracts\Schema;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Schema\AnyOfSchema;
 use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\BooleanSchema;
 use Prism\Prism\Schema\EnumSchema;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
+use Prism\Prism\Schema\RawSchema;
 use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Structured\Response as StructuredResponse;
 use Prism\Prism\Text\Response;
@@ -213,10 +216,7 @@ class AiWorkflowReplayer
         return StructuredResponseGuard::rejectNonFiniteNumbers($builder->asStructured());
     }
 
-    /**
-     * Reconstruct an ObjectSchema from the stored schema array.
-     */
-    private function reconstructSchema(AiWorkflowRequest $request): ObjectSchema
+    private function reconstructSchema(AiWorkflowRequest $request): Schema
     {
         $schemaData = $request->schema;
 
@@ -229,51 +229,331 @@ class AiWorkflowReplayer
             );
         }
 
-        return $this->buildObjectSchema($schemaData);
+        return $this->buildSchema($request->schema_name ?? 'schema', $schemaData, $this->restoresPropertyOrder($request));
     }
 
     /**
-     * Build an ObjectSchema from a schema array.
+     * Whether to put each object's properties back in the order of its `required` list.
+     *
+     * Assumes `required` lists the properties in the order they were sent.
+     */
+    protected function restoresPropertyOrder(AiWorkflowRequest $request): bool
+    {
+        return $request->getConnection()->getDriverName() === 'mysql';
+    }
+
+    /**
+     * Rebuild a stored JSON Schema node as the Prism class it was serialised from,
+     * or as a RawSchema when no class reproduces the node exactly.
+     *
+     * Only Prism's Gemini handler depends on the class. It converts typed classes
+     * into Gemini's schema format, which allows one "type" per node, but does not
+     * convert a RawSchema.
      *
      * @param  array<string, mixed>  $data
      */
-    private function buildObjectSchema(array $data): ObjectSchema
+    private function buildSchema(string $name, array $data, bool $restorePropertyOrder): Schema
     {
-        $properties = [];
+        $schema = $this->buildTypedSchema($name, $data, $restorePropertyOrder);
 
-        /** @var array<string, array<string, mixed>> $propertiesData */
-        $propertiesData = $data['properties'] ?? [];
-
-        /** @var list<string> $requiredFields */
-        $requiredFields = $data['required'] ?? [];
-
-        foreach ($propertiesData as $name => $prop) {
-            $description = is_string($prop['description'] ?? null) ? $prop['description'] : '';
-            $type = is_string($prop['type'] ?? null) ? $prop['type'] : 'string';
-
-            if (is_array($prop['enum'] ?? null)) {
-                /** @var list<string|int> $enumValues */
-                $enumValues = $prop['enum'];
-                $properties[] = new EnumSchema($name, $description, $enumValues);
-            } else {
-                $properties[] = match ($type) {
-                    'object' => $this->buildObjectSchema(array_merge($prop, ['name' => $name])),
-                    'integer', 'number' => new NumberSchema($name, $description),
-                    'boolean' => new BooleanSchema($name, $description),
-                    'array' => new ArraySchema($name, $description, new StringSchema('item', '')),
-                    default => new StringSchema($name, $description),
-                };
-            }
+        if ($schema instanceof Schema && $this->matchesRecorded($schema, $data)) {
+            return $schema;
         }
 
-        $schemaName = is_string($data['name'] ?? null) ? $data['name'] : 'schema';
-        $schemaDescription = is_string($data['description'] ?? null) ? $data['description'] : '';
+        return new RawSchema($name, $data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function matchesRecorded(Schema $schema, array $data): bool
+    {
+        $rebuilt = json_decode(json_encode($schema->toArray(), JSON_THROW_ON_ERROR), associative: true, flags: JSON_THROW_ON_ERROR);
+
+        return $this->sortKeysRecursively($rebuilt) === $this->sortKeysRecursively($data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function buildTypedSchema(string $name, array $data, bool $restorePropertyOrder): ?Schema
+    {
+        if (array_key_exists('anyOf', $data)) {
+            return $this->buildAnyOfSchema($name, $data, $restorePropertyOrder);
+        }
+
+        $description = $data['description'] ?? null;
+
+        if (! is_string($description)) {
+            return null;
+        }
+
+        [$type, $nullable] = $this->resolveType($data['type'] ?? null);
+
+        if (array_key_exists('enum', $data)) {
+            return $this->buildEnumSchema($name, $description, $data['enum'], $nullable);
+        }
+
+        return match ($type) {
+            'object' => $this->buildObjectSchema($name, $description, $data, $nullable, $restorePropertyOrder),
+            'array' => $this->buildArraySchema($name, $description, $data, $nullable, $restorePropertyOrder),
+            'number' => new NumberSchema(
+                name: $name,
+                description: $description,
+                nullable: $nullable,
+                multipleOf: $this->floatOrNull($data['multipleOf'] ?? null),
+                maximum: $this->floatOrNull($data['maximum'] ?? null),
+                exclusiveMaximum: $this->floatOrNull($data['exclusiveMaximum'] ?? null),
+                minimum: $this->floatOrNull($data['minimum'] ?? null),
+                exclusiveMinimum: $this->floatOrNull($data['exclusiveMinimum'] ?? null),
+            ),
+            'boolean' => new BooleanSchema($name, $description, $nullable),
+            'string' => new StringSchema(
+                name: $name,
+                description: $description,
+                nullable: $nullable,
+                pattern: $this->stringOrNull($data['pattern'] ?? null),
+                format: $this->stringOrNull($data['format'] ?? null),
+            ),
+            default => null,
+        };
+    }
+
+    /**
+     * Split a JSON Schema "type" into its single non-null type (null unless
+     * there is exactly one) and whether null is allowed.
+     *
+     * @return array{?string, bool}
+     */
+    private function resolveType(mixed $type): array
+    {
+        if (is_string($type)) {
+            return [$type, false];
+        }
+
+        if (! is_array($type)) {
+            return [null, false];
+        }
+
+        $nonNullTypes = array_values(array_filter($type, static fn (mixed $entry): bool => $entry !== 'null'));
+        $singleType = count($nonNullTypes) === 1 && is_string($nonNullTypes[0]) ? $nonNullTypes[0] : null;
+
+        return [$singleType, in_array('null', $type, true)];
+    }
+
+    private function buildEnumSchema(string $name, string $description, mixed $options, bool $nullable): ?EnumSchema
+    {
+        if (! is_array($options)) {
+            return null;
+        }
+
+        $scalarOptions = [];
+
+        foreach ($options as $option) {
+            if (! is_string($option) && ! is_int($option) && ! is_float($option)) {
+                return null;
+            }
+
+            $scalarOptions[] = $option;
+        }
+
+        return new EnumSchema($name, $description, $scalarOptions, $nullable);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function buildObjectSchema(string $name, string $description, array $data, bool $nullable, bool $restorePropertyOrder): ?ObjectSchema
+    {
+        $propertiesData = $this->stringKeyed($data['properties'] ?? []);
+        $requiredData = $data['required'] ?? [];
+        $allowAdditionalProperties = $data['additionalProperties'] ?? false;
+
+        if ($propertiesData === null || ! is_array($requiredData) || ! is_bool($allowAdditionalProperties)) {
+            return null;
+        }
+
+        $requiredFields = [];
+
+        foreach ($requiredData as $field) {
+            if (! is_string($field)) {
+                return null;
+            }
+
+            $requiredFields[] = $field;
+        }
+
+        $properties = [];
+
+        foreach ($propertiesData as $propertyName => $propertyData) {
+            $property = $this->stringKeyed($propertyData);
+
+            if ($property === null) {
+                return null;
+            }
+
+            $properties[] = $this->buildSchema($propertyName, $property, $restorePropertyOrder);
+        }
+
+        if ($restorePropertyOrder) {
+            $properties = $this->orderByRequiredFields($properties, $requiredFields);
+        }
 
         return new ObjectSchema(
-            name: $schemaName,
-            description: $schemaDescription,
+            name: $name,
+            description: $description,
             properties: $properties,
             requiredFields: $requiredFields,
+            allowAdditionalProperties: $allowAdditionalProperties,
+            nullable: $nullable,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function buildArraySchema(string $name, string $description, array $data, bool $nullable, bool $restorePropertyOrder): ?ArraySchema
+    {
+        $items = $this->stringKeyed($data['items'] ?? null);
+
+        if ($items === null) {
+            return null;
+        }
+
+        return new ArraySchema(
+            name: $name,
+            description: $description,
+            items: $this->buildSchema('item', $items, $restorePropertyOrder),
+            nullable: $nullable,
+            minItems: $this->intOrNull($data['minItems'] ?? null),
+            maxItems: $this->intOrNull($data['maxItems'] ?? null),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function buildAnyOfSchema(string $name, array $data, bool $restorePropertyOrder): ?AnyOfSchema
+    {
+        $options = $data['anyOf'] ?? null;
+        $description = $data['description'] ?? null;
+
+        if (! is_array($options) || ! array_is_list($options) || ($description !== null && ! is_string($description))) {
+            return null;
+        }
+
+        $nullable = $options !== [] && $options[array_key_last($options)] === ['type' => 'null'];
+
+        if ($nullable) {
+            array_pop($options);
+        }
+
+        $schemas = [];
+
+        foreach ($options as $option) {
+            $optionData = $this->stringKeyed($option);
+
+            // AnyOfSchema::toArray() throws for an option without "type", "anyOf" or "oneOf".
+            if ($optionData === null || ($optionData['type'] ?? $optionData['anyOf'] ?? $optionData['oneOf'] ?? null) === null) {
+                return null;
+            }
+
+            $schemas[] = $this->buildSchema('item', $optionData, $restorePropertyOrder);
+        }
+
+        return new AnyOfSchema($schemas, $name, $description, $nullable);
+    }
+
+    /**
+     * @param  list<Schema>  $properties
+     * @param  list<string>  $requiredFields
+     * @return list<Schema>
+     */
+    private function orderByRequiredFields(array $properties, array $requiredFields): array
+    {
+        $byName = [];
+
+        foreach ($properties as $property) {
+            $byName[$property->name()] = $property;
+        }
+
+        $names = array_map(strval(...), array_keys($byName));
+        $required = $requiredFields;
+        sort($names);
+        sort($required);
+
+        if (count($byName) !== count($properties) || $names !== $required) {
+            return $properties;
+        }
+
+        $ordered = [];
+
+        foreach ($requiredFields as $field) {
+            $property = $byName[$field] ?? null;
+
+            if ($property === null) {
+                return $properties;
+            }
+
+            $ordered[] = $property;
+        }
+
+        return $ordered;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function stringKeyed(mixed $value): ?array
+    {
+        if (! is_array($value)) {
+            return null;
+        }
+
+        $result = [];
+
+        foreach ($value as $key => $entry) {
+            if (! is_string($key)) {
+                return null;
+            }
+
+            $result[$key] = $entry;
+        }
+
+        return $result;
+    }
+
+    private function sortKeysRecursively(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $sorted = array_map(fn (mixed $entry): mixed => $this->sortKeysRecursively($entry), $value);
+
+        if (! array_is_list($sorted)) {
+            ksort($sorted);
+        }
+
+        return $sorted;
+    }
+
+    private function floatOrNull(mixed $value): ?float
+    {
+        if (is_int($value)) {
+            return (float) $value;
+        }
+
+        return is_float($value) ? $value : null;
+    }
+
+    private function intOrNull(mixed $value): ?int
+    {
+        return is_int($value) ? $value : null;
+    }
+
+    private function stringOrNull(mixed $value): ?string
+    {
+        return is_string($value) ? $value : null;
     }
 }

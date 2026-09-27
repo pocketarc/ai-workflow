@@ -8,10 +8,21 @@ use AiWorkflow\AiService;
 use AiWorkflow\AiWorkflowReplayer;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
+use AiWorkflow\PromptService;
 use AiWorkflow\Tests\Concerns\MakesTestFixtures;
+use Prism\Prism\Contracts\Schema;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Facades\Prism;
+use Prism\Prism\Schema\AnyOfSchema;
+use Prism\Prism\Schema\ArraySchema;
+use Prism\Prism\Schema\BooleanSchema;
+use Prism\Prism\Schema\EnumSchema;
+use Prism\Prism\Schema\NumberSchema;
+use Prism\Prism\Schema\ObjectSchema;
+use Prism\Prism\Schema\RawSchema;
+use Prism\Prism\Schema\StringSchema;
 use Prism\Prism\Structured\Response as StructuredResponse;
+use Prism\Prism\Testing\PrismFake;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\Text\Response;
@@ -329,147 +340,111 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
         $this->assertSame('Replay 2', $results[1]->text);
     }
 
-    // --- Schema reconstruction type mapping ---
+    // --- Schema reconstruction ---
 
-    public function test_replay_structured_reconstructs_number_types(): void
+    public function test_replay_structured_rebuilds_the_recorded_schema_from_the_same_prism_classes(): void
     {
-        Prism::fake([
-            StructuredResponseFake::make()
-                ->withStructured(['count' => 5, 'ratio' => 0.5])
-                ->withFinishReason(FinishReason::Stop),
-        ]);
+        $schema = $this->makeReplayableSchema();
 
-        $request = AiWorkflowRequest::create([
-            'prompt_id' => 'test',
-            'method' => 'sendStructuredMessages',
-            'provider' => 'openrouter',
-            'model' => 'test-model',
-            'system_prompt' => 'Test.',
-            'messages' => [['type' => 'user', 'content' => 'Hello']],
-            'finish_reason' => 'stop',
-            'duration_ms' => 100,
-            'schema' => [
-                'type' => 'object',
-                'name' => 'stats',
-                'description' => 'Statistics',
-                'properties' => [
-                    'count' => ['type' => 'integer', 'description' => 'Count'],
-                    'ratio' => ['type' => 'number', 'description' => 'Ratio'],
-                ],
-                'required' => ['count', 'ratio'],
-            ],
-        ]);
+        $fake = $this->replayStructuredWithSchema($schema->toArray(), $schema->name());
 
-        $replayer = app(AiWorkflowReplayer::class);
-        $result = $replayer->replay($request);
-
-        $this->assertInstanceOf(StructuredResponse::class, $result);
-        $this->assertSame(5, $result->structured['count']);
+        $fake->assertRequest(function (array $requests) use ($schema): void {
+            $this->assertEquals($schema, $requests[0]->schema());
+        });
     }
 
-    public function test_replay_structured_reconstructs_boolean_type(): void
+    public function test_replay_structured_falls_back_to_the_name_schema_when_the_row_has_no_schema_name(): void
     {
-        Prism::fake([
-            StructuredResponseFake::make()
-                ->withStructured(['active' => true])
-                ->withFinishReason(FinishReason::Stop),
-        ]);
+        $fake = $this->replayStructuredWithSchema($this->makeReplayableSchema()->toArray());
 
-        $request = AiWorkflowRequest::create([
-            'prompt_id' => 'test',
-            'method' => 'sendStructuredMessages',
-            'provider' => 'openrouter',
-            'model' => 'test-model',
-            'system_prompt' => 'Test.',
-            'messages' => [['type' => 'user', 'content' => 'Hello']],
-            'finish_reason' => 'stop',
-            'duration_ms' => 100,
-            'schema' => [
-                'type' => 'object',
-                'name' => 'status',
-                'description' => 'Status check',
-                'properties' => [
-                    'active' => ['type' => 'boolean', 'description' => 'Is active'],
-                ],
-                'required' => ['active'],
-            ],
-        ]);
-
-        $replayer = app(AiWorkflowReplayer::class);
-        $result = $replayer->replay($request);
-
-        $this->assertInstanceOf(StructuredResponse::class, $result);
-        $this->assertTrue($result->structured['active']);
+        $fake->assertRequest(function (array $requests): void {
+            $this->assertSame('schema', $requests[0]->schema()->name());
+        });
     }
 
-    public function test_replay_structured_reconstructs_array_type(): void
+    public function test_replay_structured_rebuilds_the_schema_when_the_database_reorders_its_keys(): void
     {
-        Prism::fake([
-            StructuredResponseFake::make()
-                ->withStructured(['items' => ['a', 'b']])
-                ->withFinishReason(FinishReason::Stop),
-        ]);
+        $recorded = $this->reverseKeysRecursively($this->makeReplayableSchema()->toArray());
 
-        $request = AiWorkflowRequest::create([
-            'prompt_id' => 'test',
-            'method' => 'sendStructuredMessages',
-            'provider' => 'openrouter',
-            'model' => 'test-model',
-            'system_prompt' => 'Test.',
-            'messages' => [['type' => 'user', 'content' => 'Hello']],
-            'finish_reason' => 'stop',
-            'duration_ms' => 100,
-            'schema' => [
-                'type' => 'object',
-                'name' => 'list',
-                'description' => 'Item list',
-                'properties' => [
-                    'items' => ['type' => 'array', 'description' => 'Items'],
-                ],
-                'required' => ['items'],
-            ],
-        ]);
+        $fake = $this->replayStructuredWithSchema($recorded);
 
-        $replayer = app(AiWorkflowReplayer::class);
-        $result = $replayer->replay($request);
+        $fake->assertRequest(function (array $requests) use ($recorded): void {
+            $sent = $requests[0]->schema();
 
-        $this->assertInstanceOf(StructuredResponse::class, $result);
-        $this->assertSame(['a', 'b'], $result->structured['items']);
+            $this->assertEquals($recorded, $sent->toArray());
+            $this->assertNotContains(RawSchema::class, $this->schemaClasses($sent));
+        });
     }
 
-    public function test_replay_structured_reconstructs_enum_type(): void
+    public function test_replay_structured_restores_property_order_from_required_where_the_database_sorts_keys(): void
     {
-        Prism::fake([
-            StructuredResponseFake::make()
-                ->withStructured(['status' => 'active'])
-                ->withFinishReason(FinishReason::Stop),
-        ]);
+        $this->app->instance(AiWorkflowReplayer::class, new class(app(PromptService::class)) extends AiWorkflowReplayer
+        {
+            protected function restoresPropertyOrder(AiWorkflowRequest $request): bool
+            {
+                return true;
+            }
+        });
 
-        $request = AiWorkflowRequest::create([
-            'prompt_id' => 'test',
-            'method' => 'sendStructuredMessages',
-            'provider' => 'openrouter',
-            'model' => 'test-model',
-            'system_prompt' => 'Test.',
-            'messages' => [['type' => 'user', 'content' => 'Hello']],
-            'finish_reason' => 'stop',
-            'duration_ms' => 100,
-            'schema' => [
-                'type' => 'object',
-                'name' => 'record',
-                'description' => 'A record',
-                'properties' => [
-                    'status' => ['type' => 'string', 'description' => 'Status', 'enum' => ['active', 'inactive', 'pending']],
-                ],
-                'required' => ['status'],
+        $schema = $this->makeReplayableSchema();
+
+        $fake = $this->replayStructuredWithSchema($this->reverseKeysRecursively($schema->toArray()), $schema->name());
+
+        $fake->assertRequest(function (array $requests) use ($schema): void {
+            $this->assertEquals($schema, $requests[0]->schema());
+        });
+    }
+
+    public function test_replay_structured_sends_an_any_of_with_an_untyped_option_as_recorded(): void
+    {
+        $recorded = [
+            'description' => 'Statistics',
+            'type' => 'object',
+            'properties' => [
+                'value' => ['anyOf' => [['description' => 'Anything']], 'description' => 'A value'],
             ],
-        ]);
+            'required' => ['value'],
+            'additionalProperties' => false,
+        ];
 
-        $replayer = app(AiWorkflowReplayer::class);
-        $result = $replayer->replay($request);
+        $fake = $this->replayStructuredWithSchema($recorded);
 
-        $this->assertInstanceOf(StructuredResponse::class, $result);
-        $this->assertSame('active', $result->structured['status']);
+        $fake->assertRequest(function (array $requests) use ($recorded): void {
+            $sent = $requests[0]->schema();
+
+            $this->assertInstanceOf(ObjectSchema::class, $sent);
+            $this->assertInstanceOf(RawSchema::class, $sent->properties[0]);
+            $this->assertSame($recorded, $sent->toArray());
+        });
+    }
+
+    public function test_replay_structured_sends_nodes_it_cannot_rebuild_exactly_as_recorded(): void
+    {
+        $recorded = [
+            'description' => 'Statistics',
+            'type' => 'object',
+            'properties' => [
+                'count' => ['type' => 'integer', 'description' => 'Count', 'minimum' => 0],
+                'tags' => ['type' => 'array', 'description' => 'Tags'],
+                'label' => ['type' => 'string', 'description' => 'Label', 'minLength' => 3],
+                'ratio' => ['description' => 'Ratio', 'type' => 'number'],
+            ],
+            'required' => ['count', 'tags', 'label', 'ratio'],
+            'additionalProperties' => false,
+        ];
+
+        $fake = $this->replayStructuredWithSchema($recorded);
+
+        $fake->assertRequest(function (array $requests) use ($recorded): void {
+            $sent = $requests[0]->schema();
+
+            $this->assertInstanceOf(ObjectSchema::class, $sent);
+            $this->assertSame($recorded, $sent->toArray());
+            $this->assertInstanceOf(RawSchema::class, $sent->properties[0]);
+            $this->assertInstanceOf(RawSchema::class, $sent->properties[1]);
+            $this->assertInstanceOf(RawSchema::class, $sent->properties[2]);
+            $this->assertInstanceOf(NumberSchema::class, $sent->properties[3]);
+        });
     }
 
     // --- Template variables for faithful replay ---
@@ -503,5 +478,100 @@ class AiWorkflowReplayerTest extends DatabaseTestCase
 
         $this->assertInstanceOf(Response::class, $result);
         $this->assertSame('Replayed with vars', $result->text);
+    }
+
+    private function makeReplayableSchema(): ObjectSchema
+    {
+        return new ObjectSchema(
+            name: 'TicketTriage',
+            description: 'A support ticket triage',
+            properties: [
+                new EnumSchema('priority', 'How urgent the ticket is', ['low', 'medium', 'high'], nullable: true),
+                new NumberSchema('confidence', 'Confidence in the triage', nullable: true, maximum: 1.0, minimum: 0.0),
+                new BooleanSchema('needs_human', 'Whether a person must reply'),
+                new StringSchema('reference', 'Order reference', nullable: true, pattern: '^[A-Z]{3}-\d+$'),
+                new ArraySchema('tags', 'Tags that apply', new StringSchema('item', 'A tag'), minItems: 1, maxItems: 5),
+                new ArraySchema('actions', 'Follow-up actions', new ObjectSchema(
+                    name: 'item',
+                    description: 'A follow-up action',
+                    properties: [
+                        new StringSchema('summary', 'What to do'),
+                        new NumberSchema('due_in_days', 'Days until it is due', nullable: true),
+                    ],
+                    requiredFields: ['summary', 'due_in_days'],
+                )),
+                new ObjectSchema(
+                    name: 'customer',
+                    description: 'The customer, when known',
+                    properties: [
+                        new StringSchema('email', 'Email address', format: 'email'),
+                    ],
+                    requiredFields: ['email'],
+                    nullable: true,
+                ),
+                new AnyOfSchema(
+                    schemas: [
+                        new StringSchema('item', 'A queue name'),
+                        new NumberSchema('item', 'An agent ID', minimum: 1.0),
+                    ],
+                    name: 'assignee',
+                    description: 'Who should pick it up',
+                    nullable: true,
+                ),
+            ],
+            requiredFields: ['priority', 'confidence', 'needs_human', 'reference', 'tags', 'actions', 'customer', 'assignee'],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $schema
+     */
+    private function replayStructuredWithSchema(array $schema, ?string $schemaName = null): PrismFake
+    {
+        $request = AiWorkflowRequest::create([
+            'prompt_id' => 'test',
+            'method' => 'sendStructuredMessages',
+            'provider' => 'openrouter',
+            'model' => 'test-model',
+            'system_prompt' => 'Test.',
+            'messages' => [['type' => 'user', 'content' => 'Hello']],
+            'finish_reason' => 'stop',
+            'duration_ms' => 100,
+            'schema' => $schema,
+            'schema_name' => $schemaName,
+        ]);
+
+        $fake = Prism::fake([
+            StructuredResponseFake::make()->withStructured([])->withFinishReason(FinishReason::Stop),
+        ]);
+
+        app(AiWorkflowReplayer::class)->replay($request->refresh());
+
+        return $fake;
+    }
+
+    private function reverseKeysRecursively(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        $reversed = array_map(fn (mixed $entry): mixed => $this->reverseKeysRecursively($entry), $value);
+
+        return array_is_list($reversed) ? $reversed : array_reverse($reversed, true);
+    }
+
+    /**
+     * @return list<class-string<Schema>>
+     */
+    private function schemaClasses(Schema $schema): array
+    {
+        $children = match (true) {
+            $schema instanceof ObjectSchema => $schema->properties,
+            $schema instanceof ArraySchema => [$schema->items],
+            default => [],
+        };
+
+        return array_merge([$schema::class], ...array_map($this->schemaClasses(...), array_values($children)));
     }
 }
