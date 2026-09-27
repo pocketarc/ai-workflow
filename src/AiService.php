@@ -612,6 +612,8 @@ class AiService
         $integration = null;
         $breaker = null;
         $streamBegan = false;
+        $endEvent = null;
+        $durationMs = 0.0;
 
         try {
             // Resolve inside the try so a managed-provider misconfiguration is
@@ -636,11 +638,11 @@ class AiService
                 yield $event;
 
                 if ($event instanceof StreamEndEvent) {
+                    $endEvent = $event;
                     $durationMs = (microtime(true) - $startTime) * 1000;
 
                     $this->logUnexpectedFinishReason($event->finishReason, $prompt, 'streamMessages');
                     $this->logStreamRequest($prompt, $provider, $model, $systemPrompt, $messages->all(), $event, $durationMs);
-                    $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $event->finishReason, $event->usage ?? new Usage(0, 0), $durationMs);
                 }
             }
 
@@ -662,6 +664,10 @@ class AiService
             $this->dispatchFailedEvent($prompt, 'streamMessages', $model, $exception, $durationMs);
 
             throw $exception;
+        }
+
+        if ($endEvent !== null) {
+            $this->dispatchCompletedEvent($prompt, 'streamMessages', $model, $endEvent->finishReason, $endEvent->usage ?? new Usage(0, 0), $durationMs);
         }
     }
 

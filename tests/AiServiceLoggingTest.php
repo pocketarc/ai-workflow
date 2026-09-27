@@ -558,6 +558,33 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertSame([], $failedEvents->all());
     }
 
+    public function test_a_throwing_completed_listener_does_not_log_a_failed_stream(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Fine')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(80, 20)),
+        ]);
+
+        $failedEvents = $this->throwFromCompletedListener();
+
+        try {
+            foreach (app(AiService::class)->streamMessages(collect([new UserMessage('Hi')]), $this->makePrompt()) as $event) {
+                $this->assertNotNull($event);
+            }
+
+            $this->fail('Expected RuntimeException');
+        } catch (RuntimeException $e) {
+            $this->assertSame('Listener failed', $e->getMessage());
+        }
+
+        $request = AiWorkflowRequest::query()->sole();
+        $this->assertNull($request->error);
+        $this->assertSame(80, $request->input_tokens);
+        $this->assertSame([], $failedEvents->all());
+    }
+
     /**
      * @return Collection<int, AiWorkflowRequestFailed>
      */
