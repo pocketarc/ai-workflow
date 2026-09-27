@@ -20,6 +20,7 @@ use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Meta;
 use Prism\Prism\ValueObjects\Usage;
+use RuntimeException;
 
 class AiWorkflowCacheTest extends TestCase
 {
@@ -229,6 +230,37 @@ class AiWorkflowCacheTest extends TestCase
         $this->assertInstanceOf(SentimentData::class, $second->data);
         $this->assertSame('positive', $second->data->sentiment);
         $this->assertEquals(new Usage(0, 0), $second->usage);
+    }
+
+    public function test_send_structured_data_does_not_treat_a_cache_failure_as_a_validation_failure(): void
+    {
+        $this->app->instance(AiWorkflowCache::class, new class extends AiWorkflowCache
+        {
+            #[\Override]
+            public function put(string $key, array $responseData, int $ttlSeconds): void
+            {
+                throw new RuntimeException('Cache store is down');
+            }
+        });
+
+        $fake = Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'positive', 'confidence' => 0.9])
+                ->withFinishReason(FinishReason::Stop),
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'positive', 'confidence' => 0.9])
+                ->withFinishReason(FinishReason::Stop),
+        ]);
+
+        try {
+            app(AiService::class)->sendStructuredData(collect([new UserMessage('Analyze')]), $this->makePrompt(cacheTtl: 3600), SentimentData::class);
+            $this->fail('Expected RuntimeException');
+        } catch (RuntimeException $e) {
+            $this->assertSame(RuntimeException::class, $e::class);
+            $this->assertSame('Cache store is down', $e->getMessage());
+        }
+
+        $fake->assertCallCount(1);
     }
 
     public function test_cache_hits_when_middleware_rewrites_the_messages(): void

@@ -516,12 +516,6 @@ class AiService
                 // lands in the catch below and is fed back to the model on the next attempt.
                 /** @var T */
                 $data = $dataClass::validateAndCreate($payload);
-
-                if ($providerUsage !== null) {
-                    $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
-                }
-
-                return new StructuredDataResult($data, $response, $usage);
             } catch (Throwable $e) {
                 if ($attempt === $maxAttempts) {
                     throw new StructuredValidationException($e->getMessage(), $attempt, $e, $usage);
@@ -532,7 +526,15 @@ class AiService
                     new AssistantMessage(json_encode($response->structured, JSON_THROW_ON_ERROR)),
                     new UserMessage("The previous response failed validation: {$e->getMessage()}. Please fix the response and try again."),
                 ]);
+
+                continue;
             }
+
+            if ($providerUsage !== null) {
+                $this->cacheStructuredResponse($provider, $model, $prompt->prompt, $messages->all(), $prompt, $schema, $response);
+            }
+
+            return new StructuredDataResult($data, $response, $usage);
         }
 
         throw new StructuredValidationException('Max attempts reached', $maxAttempts, usage: $usage);
