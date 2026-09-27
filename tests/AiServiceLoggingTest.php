@@ -5,6 +5,13 @@ declare(strict_types=1);
 namespace AiWorkflow\Tests;
 
 use AiWorkflow\AiService;
+use AiWorkflow\Enums\GuardrailDirection;
+use AiWorkflow\Events\AiWorkflowRequestCompleted;
+use AiWorkflow\Events\AiWorkflowRequestFailed;
+use AiWorkflow\Exceptions\GuardrailViolationException;
+use AiWorkflow\Middleware\AiWorkflowContext;
+use AiWorkflow\Middleware\InputGuardrail;
+use AiWorkflow\Middleware\OutputGuardrail;
 use AiWorkflow\Models\AiWorkflowExecution;
 use AiWorkflow\Models\AiWorkflowRequest;
 use AiWorkflow\PromptData;
@@ -12,6 +19,8 @@ use AiWorkflow\Tests\Concerns\MakesTestFixtures;
 use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response as HttpClientResponse;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Event;
 use Prism\Prism\Enums\FinishReason;
 use Prism\Prism\Exceptions\PrismException;
 use Prism\Prism\Exceptions\PrismStructuredDecodingException;
@@ -21,6 +30,7 @@ use Prism\Prism\Testing\TextResponseFake;
 use Prism\Prism\ValueObjects\Messages\UserMessage;
 use Prism\Prism\ValueObjects\Usage;
 use ReflectionMethod;
+use RuntimeException;
 
 class AiServiceLoggingTest extends DatabaseTestCase
 {
@@ -101,7 +111,8 @@ class AiServiceLoggingTest extends DatabaseTestCase
         Prism::fake([
             TextResponseFake::make()
                 ->withText('Bad response')
-                ->withFinishReason(FinishReason::Unknown),
+                ->withFinishReason(FinishReason::Unknown)
+                ->withUsage(new Usage(70, 10)),
         ]);
 
         $service = app(AiService::class);
@@ -121,6 +132,8 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertSame(PrismException::class, $request->error_class);
         $this->assertNull($request->http_status);
         $this->assertNull($request->response_body);
+        $this->assertSame(70, $request->input_tokens);
+        $this->assertSame(10, $request->output_tokens);
     }
 
     public function test_a_structured_request_logs_its_cache_tokens(): void
@@ -192,7 +205,7 @@ class AiServiceLoggingTest extends DatabaseTestCase
 
     public function test_extract_http_details_returns_null_without_http_context(): void
     {
-        $details = $this->invokeExtractHttpDetails(new \RuntimeException('boom'));
+        $details = $this->invokeExtractHttpDetails(new RuntimeException('boom'));
 
         $this->assertNull($details['status']);
         $this->assertNull($details['body']);
@@ -278,6 +291,128 @@ class AiServiceLoggingTest extends DatabaseTestCase
         $this->assertNotNull($request->schema);
         $this->assertIsArray($request->schema);
         $this->assertSame('test', $request->schema_name);
+    }
+
+    public function test_response_rejected_by_an_output_guardrail_is_logged_with_its_tokens(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Bad content')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(80, 20, thoughtTokens: 5)),
+        ]);
+
+        $service = app(AiService::class);
+        $service->addMiddleware(new class extends OutputGuardrail
+        {
+            protected function validate(AiWorkflowContext $context): void
+            {
+                throw new GuardrailViolationException('content-filter', GuardrailDirection::Output, 'Rejected');
+            }
+        });
+
+        try {
+            $service->sendMessages(collect([new UserMessage('Hi')]), $this->makePrompt());
+            $this->fail('Expected GuardrailViolationException');
+        } catch (GuardrailViolationException $e) {
+            $this->assertEquals(new Usage(80, 20, thoughtTokens: 5), $e->usage());
+        }
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertSame('Rejected', $request->error);
+        $this->assertSame(80, $request->input_tokens);
+        $this->assertSame(20, $request->output_tokens);
+        $this->assertSame(5, $request->thought_tokens);
+    }
+
+    public function test_a_throwing_completed_listener_does_not_log_a_failed_text_request(): void
+    {
+        Prism::fake([
+            TextResponseFake::make()
+                ->withText('Fine')
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(80, 20)),
+        ]);
+
+        $failedEvents = $this->throwFromCompletedListener();
+
+        try {
+            app(AiService::class)->sendMessages(collect([new UserMessage('Hi')]), $this->makePrompt());
+            $this->fail('Expected RuntimeException');
+        } catch (RuntimeException $e) {
+            $this->assertSame('Listener failed', $e->getMessage());
+        }
+
+        $request = AiWorkflowRequest::query()->sole();
+        $this->assertNull($request->error);
+        $this->assertSame(80, $request->input_tokens);
+        $this->assertSame([], $failedEvents->all());
+    }
+
+    public function test_a_throwing_completed_listener_does_not_log_a_failed_structured_request(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['answer' => 'test'])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(80, 20)),
+        ]);
+
+        $failedEvents = $this->throwFromCompletedListener();
+
+        try {
+            app(AiService::class)->sendStructuredMessages(collect([new UserMessage('Hi')]), $this->makePrompt(), $this->makeSchema());
+            $this->fail('Expected RuntimeException');
+        } catch (RuntimeException $e) {
+            $this->assertSame('Listener failed', $e->getMessage());
+        }
+
+        $request = AiWorkflowRequest::query()->sole();
+        $this->assertNull($request->error);
+        $this->assertSame(80, $request->input_tokens);
+        $this->assertSame([], $failedEvents->all());
+    }
+
+    /**
+     * @return Collection<int, AiWorkflowRequestFailed>
+     */
+    private function throwFromCompletedListener(): Collection
+    {
+        /** @var Collection<int, AiWorkflowRequestFailed> $failedEvents */
+        $failedEvents = new Collection;
+
+        Event::listen(AiWorkflowRequestCompleted::class, function (): void {
+            throw new RuntimeException('Listener failed');
+        });
+        Event::listen(AiWorkflowRequestFailed::class, function (AiWorkflowRequestFailed $event) use ($failedEvents): void {
+            $failedEvents->push($event);
+        });
+
+        return $failedEvents;
+    }
+
+    public function test_input_guardrail_violation_is_logged_without_tokens(): void
+    {
+        $service = app(AiService::class);
+        $service->addMiddleware(new class extends InputGuardrail
+        {
+            protected function validate(AiWorkflowContext $context): void
+            {
+                throw new GuardrailViolationException('pii', GuardrailDirection::Input, 'Blocked');
+            }
+        });
+
+        try {
+            $service->sendMessages(collect([new UserMessage('Hi')]), $this->makePrompt());
+            $this->fail('Expected GuardrailViolationException');
+        } catch (GuardrailViolationException $e) {
+            $this->assertNull($e->usage());
+        }
+
+        $request = AiWorkflowRequest::first();
+        $this->assertNotNull($request);
+        $this->assertNull($request->input_tokens);
     }
 
     public function test_execution_token_tracking(): void

@@ -13,8 +13,12 @@ class StructuredValidationException extends AiWorkflowException
         string $message,
         public readonly int $attempts,
         ?Throwable $previous = null,
-        public readonly ?Usage $usage = null,
+        ?Usage $usage = null,
     ) {
         parent::__construct($message, 0, $previous);
+
+        if ($usage !== null) {
+            $this->recordUsage($usage);
+        }
     }
 }

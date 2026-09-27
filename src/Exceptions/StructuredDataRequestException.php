@@ -12,9 +12,11 @@ class StructuredDataRequestException extends AiWorkflowException
     public function __construct(
         string $message,
         public readonly int $attempts,
-        public readonly Usage $usage,
+        Usage $usage,
         Throwable $previous,
     ) {
         parent::__construct($message, 0, $previous);
+
+        $this->recordUsage($usage);
     }
 }

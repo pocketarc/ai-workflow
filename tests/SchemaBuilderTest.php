@@ -12,6 +12,7 @@ use AiWorkflow\Exceptions\StructuredValidationException;
 use AiWorkflow\Middleware\AiWorkflowContext;
 use AiWorkflow\Middleware\AiWorkflowMiddleware;
 use AiWorkflow\Middleware\InputGuardrail;
+use AiWorkflow\Middleware\OutputGuardrail;
 use AiWorkflow\PromptData;
 use AiWorkflow\SchemaBuilder;
 use AiWorkflow\StructuredDataResult;
@@ -520,7 +521,7 @@ class SchemaBuilderTest extends TestCase
             );
             $this->fail('Expected StructuredValidationException');
         } catch (StructuredValidationException $e) {
-            $this->assertEquals(new Usage(220, 110, cacheWriteInputTokens: 40), $e->usage);
+            $this->assertEquals(new Usage(220, 110, cacheWriteInputTokens: 40), $e->usage());
         }
     }
 
@@ -543,7 +544,7 @@ class SchemaBuilderTest extends TestCase
             $this->fail('Expected StructuredDataRequestException');
         } catch (StructuredDataRequestException $e) {
             $this->assertSame(2, $e->attempts);
-            $this->assertEquals(new Usage(100, 50), $e->usage);
+            $this->assertEquals(new Usage(100, 50), $e->usage());
             $this->assertInstanceOf(Exception::class, $e->getPrevious());
             $this->assertSame($e->getPrevious()->getMessage(), $e->getMessage());
         }
@@ -569,7 +570,7 @@ class SchemaBuilderTest extends TestCase
             $this->fail('Expected StructuredDataRequestException');
         } catch (StructuredDataRequestException $e) {
             $this->assertSame(1, $e->attempts);
-            $this->assertEquals(new Usage(0, 0), $e->usage);
+            $this->assertEquals(new Usage(0, 0), $e->usage());
             $this->assertInstanceOf(PrismRateLimitedException::class, $e->getPrevious());
         }
     }
@@ -633,6 +634,44 @@ class SchemaBuilderTest extends TestCase
             $this->fail('Expected GuardrailViolationException');
         } catch (GuardrailViolationException $e) {
             $this->assertSame($guardrail->thrown, $e);
+            $this->assertEquals(new Usage(220, 110), $e->usage());
+        }
+    }
+
+    public function test_send_structured_data_counts_the_response_an_output_guardrail_rejected(): void
+    {
+        Prism::fake([
+            StructuredResponseFake::make()
+                ->withStructured(['confidence' => 0.5])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(100, 50)),
+            StructuredResponseFake::make()
+                ->withStructured(['sentiment' => 'negative', 'confidence' => 0.8])
+                ->withFinishReason(FinishReason::Stop)
+                ->withUsage(new Usage(120, 60)),
+        ]);
+
+        $service = app(AiService::class);
+        $service->addMiddleware(new class extends OutputGuardrail
+        {
+            private int $calls = 0;
+
+            protected function validate(AiWorkflowContext $context): void
+            {
+                if (++$this->calls === 2) {
+                    throw new GuardrailViolationException('content-filter', GuardrailDirection::Output, 'Rejected');
+                }
+            }
+        });
+
+        try {
+            $service->sendStructuredData(
+                collect([new UserMessage('Analyze')]),
+                new PromptData(id: 'test', model: 'openrouter:test-model', prompt: 'Analyze.'),
+                SentimentData::class,
+            );
+            $this->fail('Expected GuardrailViolationException');
+        } catch (GuardrailViolationException $e) {
             $this->assertEquals(new Usage(220, 110), $e->usage());
         }
     }
