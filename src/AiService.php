@@ -1091,7 +1091,7 @@ class AiService
         }
 
         $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages);
-        $this->cache->put($key, [
+        $this->writeCache($key, [
             'text' => $response->text,
             'finish_reason' => $response->finishReason->value,
             'usage' => [
@@ -1157,7 +1157,7 @@ class AiService
         }
 
         $key = $this->cache->generateKey($provider, $model, $systemPrompt, $messages, $schema);
-        $this->cache->put($key, [
+        $this->writeCache($key, [
             'structured' => $response->structured,
             'finish_reason' => $response->finishReason->value,
             'usage' => [
@@ -1170,6 +1170,18 @@ class AiService
                 'model' => $response->meta->model,
             ],
         ], $prompt->cacheTtl);
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseData
+     */
+    private function writeCache(string $key, array $responseData, int $ttlSeconds): void
+    {
+        try {
+            $this->cache->put($key, $responseData, $ttlSeconds);
+        } catch (Throwable $e) {
+            report($e);
+        }
     }
 
     /**
