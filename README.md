@@ -738,7 +738,7 @@ Other changes to plan for:
 - A generic `Media` attachment is now sent according to its MIME type. In 6.x, the package left it out of OpenRouter requests.
 - When the package logs a request with a URL attachment, it no longer downloads the file. In 6.x, it downloaded the file to store its base64 content next to the URL.
 
-The stored data format has not changed, so logged requests, schemas, cache keys and cached responses from 6.x can be read and replayed as before.
+The package reads and replays the requests that 6.x logged, including those with base64 content next to a URL. It also reads the responses that 6.x cached, and builds the same schemas and cache keys as 6.x. The only exception is a request with a URL attachment. Its 6.x cache key included the base64 content of the file, so the package does not find the 6.x cache entry.
 
 ## Development
 
